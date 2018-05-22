@@ -2,29 +2,14 @@ extern crate url;
 
 use std::io::prelude::*;
 use std::io::Error;
-use std::net::TcpStream;
 use std::io::BufReader;
+use std::net::TcpStream;
 use std::thread;
 use std::sync::mpsc;
-use std::time::Duration;
-
-use url::{Url, ParseError};
-
 use std::sync::Arc;
 use std::sync::Mutex;
-
 use std::collections::HashMap;
-
-pub fn load() {
-    println!("is it running");
-    let event_source = EventSource::new("http://127.0.0.1:8080/sub").unwrap();
-
-    event_source.on_message(|message| {
-        println!("New message {}", message);
-    });
-
-    thread::sleep(Duration::from_millis(4000));
-}
+use url::{Url, ParseError};
 
 pub struct EventSource {
     listeners: Arc<Mutex<HashMap<String, Vec<fn(&str)>>>>
