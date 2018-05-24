@@ -46,10 +46,18 @@ impl EventSource {
         let listeners = Arc::clone(&self.listeners);
 
         thread::spawn(move || {
+            let mut body_started = false;
+
             for received in rx {
+                if !body_started {
+                    body_started = received == "";
+                    continue;
+                }
+
                 if received.starts_with(":") {
                     continue;
                 }
+
                 let event = parse_event(received);
                 let listeners = listeners.lock().unwrap();
                 for listener in listeners.get(event.type_.as_str()).unwrap().iter() {
@@ -163,7 +171,7 @@ mod tests {
             }
         });
 
-        let test_stream = ("data: some message\n").as_bytes();
+        let test_stream = ("\ndata: some message\n").as_bytes();
         event_source.start(test_stream).unwrap();
 
         unsafe {
@@ -192,7 +200,8 @@ mod tests {
             }
         });
 
-        let test_stream = "data: message
+        let test_stream = "
+data: message
 :this is a comment
 :this is another comment
 data: this is a message\n"
@@ -203,6 +212,37 @@ data: this is a message\n"
         unsafe {
             thread::sleep(Duration::from_millis(500));
             assert_eq!(CALL_COUNT, 2);
+        }
+    }
+
+    #[test]
+    fn ensure_stream_is_parsed_after_headers() {
+        static mut CALL_COUNT: i32 = 0;
+
+        let event_source = EventSource {
+            listeners: Arc::new(Mutex::new(HashMap::new()))
+        };
+
+        event_source.on_message(|_| {
+            unsafe {
+                CALL_COUNT += 1;
+            }
+        });
+
+        let test_stream = "HTTP/1.1 200 OK
+Server: nginx/1.10.3
+Date: Thu, 24 May 2018 12:26:38 GMT
+Content-Type: text/event-stream; charset=utf-8
+Connection: keep-alive
+
+data: this is a message\n"
+            .as_bytes();
+
+        event_source.start(test_stream).unwrap();
+
+        unsafe {
+            thread::sleep(Duration::from_millis(300));
+            assert_eq!(CALL_COUNT, 1);
         }
     }
 }
