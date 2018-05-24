@@ -38,22 +38,24 @@ impl EventSource {
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || {
+            let mut body_started = false;
+
             for line in reader.lines() {
-                tx.send(line.unwrap()).unwrap();
+                let line = line.unwrap();
+
+                if !body_started {
+                    body_started = line == "";
+                    continue;
+                }
+
+                tx.send(line).unwrap();
             }
         });
 
         let listeners = Arc::clone(&self.listeners);
 
         thread::spawn(move || {
-            let mut body_started = false;
-
             for received in rx {
-                if !body_started {
-                    body_started = received == "";
-                    continue;
-                }
-
                 if received.starts_with(":") || received == "" {
                     continue;
                 }
