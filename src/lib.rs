@@ -12,7 +12,13 @@ use std::collections::HashMap;
 use url::{Url, ParseError};
 
 pub struct EventSource {
-    listeners: Arc<Mutex<HashMap<String, Vec<fn(&str)>>>>
+    listeners: Arc<Mutex<HashMap<String, Vec<fn(Event)>>>>
+}
+
+#[derive(Debug, Clone)]
+pub struct Event {
+    type_: String,
+    data: String
 }
 
 impl EventSource {
@@ -41,23 +47,32 @@ impl EventSource {
 
         thread::spawn(move || {
             for received in rx {
+                let event = parse_event(received);
                 let listeners = listeners.lock().unwrap();
-                listeners.get("message").unwrap().iter().for_each(|listener| {
-                    listener(received.as_str());
-                });
+                for listener in listeners.get(event.type_.as_str()).unwrap().iter() {
+                    listener(event.clone())
+                }
             }
         });
 
         Ok(())
     }
 
-    pub fn on_message(&self, listener: fn(&str)) {
+    pub fn on_message(&self, listener: fn(Event)) {
         let mut listeners = self.listeners.lock().unwrap();
          if listeners.contains_key("message") {
              listeners.get_mut("message").unwrap().push(listener);
          } else {
              listeners.insert(String::from("message"), vec!(listener));
          }
+    }
+}
+
+fn parse_event(message: String) -> Event {
+    let parts: Vec<&str> = message.split(":").collect();
+    Event {
+        type_: String::from("message"),
+        data: String::from(parts[1].trim())
     }
 }
 
@@ -141,11 +156,11 @@ mod tests {
         event_source.on_message(|message| {
             unsafe {
                 CALL_COUNT += 1;
-                IS_RIGHT_MESSAGE = message == "some message";
+                IS_RIGHT_MESSAGE = message.data == "some message";
             }
         });
 
-        let test_stream = ("some message\n").as_bytes();
+        let test_stream = ("data: some message\n").as_bytes();
         event_source.start(test_stream).unwrap();
 
         unsafe {
