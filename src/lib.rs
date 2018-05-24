@@ -47,6 +47,9 @@ impl EventSource {
 
         thread::spawn(move || {
             for received in rx {
+                if received.starts_with(":") {
+                    continue;
+                }
                 let event = parse_event(received);
                 let listeners = listeners.lock().unwrap();
                 for listener in listeners.get(event.type_.as_str()).unwrap().iter() {
@@ -172,6 +175,34 @@ mod tests {
 
             assert_eq!(CALL_COUNT, 1);
             assert!(IS_RIGHT_MESSAGE);
+        }
+    }
+
+    #[test]
+    fn should_not_trigger_listeners_for_comments() {
+        static mut CALL_COUNT: i32 = 0;
+
+        let event_source = EventSource {
+            listeners: Arc::new(Mutex::new(HashMap::new()))
+        };
+
+        event_source.on_message(|_| {
+            unsafe {
+                CALL_COUNT += 1;
+            }
+        });
+
+        let test_stream = "data: message
+:this is a comment
+:this is another comment
+data: this is a message\n"
+            .as_bytes();
+
+        event_source.start(test_stream).unwrap();
+
+        unsafe {
+            thread::sleep(Duration::from_millis(500));
+            assert_eq!(CALL_COUNT, 2);
         }
     }
 }
