@@ -54,7 +54,7 @@ impl EventSource {
                     continue;
                 }
 
-                if received.starts_with(":") {
+                if received.starts_with(":") || received == "" {
                     continue;
                 }
 
@@ -243,6 +243,34 @@ data: this is a message\n"
         unsafe {
             thread::sleep(Duration::from_millis(300));
             assert_eq!(CALL_COUNT, 1);
+        }
+    }
+
+    #[test]
+    fn ignore_empty_messages() {
+        static mut CALL_COUNT: i32 = 0;
+
+        let event_source = EventSource {
+            listeners: Arc::new(Mutex::new(HashMap::new()))
+        };
+
+        event_source.on_message(|_| {
+            unsafe {
+                CALL_COUNT += 1;
+            }
+        });
+
+        let test_stream = "
+data: message
+
+data: this is a message\n"
+            .as_bytes();
+
+        event_source.start(test_stream).unwrap();
+
+        unsafe {
+            thread::sleep(Duration::from_millis(500));
+            assert_eq!(CALL_COUNT, 2);
         }
     }
 }
