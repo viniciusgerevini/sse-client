@@ -1,15 +1,15 @@
 extern crate url;
 
 use std::io::prelude::*;
-use std::io::Error;
 use std::io::BufReader;
-use std::net::TcpStream;
 use std::thread;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::collections::HashMap;
 use url::{Url, ParseError};
+
+mod network;
 
 pub struct EventSource {
     listeners: Arc<Mutex<HashMap<String, Vec<fn(Event)>>>>
@@ -23,7 +23,7 @@ pub struct Event {
 
 impl EventSource {
     pub fn new(url: &str) -> Result<EventSource, ParseError> {
-        let stream = open_connection(Url::parse(url)?).unwrap();
+        let stream = network::open_connection(Url::parse(url)?).unwrap();
         let reader = BufReader::new(stream);
 
         let listeners = Arc::new(Mutex::new(HashMap::new()));
@@ -138,38 +138,6 @@ fn update_event(pending_event: Option<Event>, message: String) -> Option<Event> 
 fn parse_field<'a>(message: &'a String) -> (&'a str, &'a str) {
     let parts: Vec<&str> = message.split(":").collect();
     (parts[0], parts[1].trim())
-}
-
-fn open_connection(url: Url) -> Result<TcpStream, Error> {
-    let path = url.path();
-    let host = get_host(&url);
-    let host = host.as_str();
-
-    let mut stream = TcpStream::connect(host)?;
-
-    let response = format!(
-        "GET {} HTTP/1.1\r\nAccept: text/event-stream\r\nHost: {}\r\n\r\n",
-        path,
-        host
-    );
-
-    stream.write(response.as_bytes())?;
-    stream.flush().unwrap();
-
-    Ok(stream)
-}
-
-fn get_host(url: &Url) -> String {
-    let mut host = match url.host_str() {
-        Some(h) => String::from(h),
-        None => String::from("localhost")
-    };
-
-    if let Some(port) = url.port() {
-        host = format!("{}:{}", host, port);
-    }
-
-    host
 }
 
 #[cfg(test)]
