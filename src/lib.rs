@@ -78,19 +78,25 @@ impl EventSource {
     }
 
     pub fn on_message(&self, listener: fn(Event)) {
+        self.add_event_listener("message", listener);
+    }
+
+    pub fn add_event_listener(&self, event_type: &str, listener: fn(Event)) {
         let mut listeners = self.listeners.lock().unwrap();
-         if listeners.contains_key("message") {
-             listeners.get_mut("message").unwrap().push(listener);
+         if listeners.contains_key(event_type) {
+             listeners.get_mut(event_type).unwrap().push(listener);
          } else {
-             listeners.insert(String::from("message"), vec!(listener));
+             listeners.insert(String::from(event_type), vec!(listener));
          }
     }
 }
 
 fn dispatch_event(listeners: &Arc<Mutex<HashMap<String, Vec<fn(Event)>>>>, event: &Event) {
     let listeners = listeners.lock().unwrap();
-    for listener in listeners.get("message").unwrap().iter() {
-        listener(event.clone())
+    if listeners.contains_key(&event.type_) {
+        for listener in listeners.get(&event.type_).unwrap().iter() {
+            listener(event.clone())
+        }
     }
 }
 
@@ -303,14 +309,14 @@ data: this is a message\n\n"
     }
 
     #[test]
-    fn define_event_type() {
+    fn event_trigger_its_defined_listener() {
         static mut IS_RIGHT_EVENT: bool = false;
 
         let event_source = EventSource {
             listeners: Arc::new(Mutex::new(HashMap::new()))
         };
 
-        event_source.on_message(|event| {
+        event_source.add_event_listener("myEvent", |event| {
             unsafe {
                 IS_RIGHT_EVENT = event.type_ == String::from("myEvent");
                 IS_RIGHT_EVENT = IS_RIGHT_EVENT && event.data == String::from("my message");
@@ -327,6 +333,33 @@ data: my message\n\n"
         unsafe {
             thread::sleep(Duration::from_millis(500));
             assert!(IS_RIGHT_EVENT);
+        }
+    }
+
+    #[test]
+    fn dont_trigger_on_message_for_event() {
+        static mut ON_MESSAGE_WAS_CALLED: bool = false;
+
+        let event_source = EventSource {
+            listeners: Arc::new(Mutex::new(HashMap::new()))
+        };
+
+        event_source.on_message(|_| {
+            unsafe {
+                ON_MESSAGE_WAS_CALLED = true;
+            }
+        });
+
+        let test_stream = "
+event: myEvent
+data: my message\n\n"
+            .as_bytes();
+
+        event_source.start(test_stream).unwrap();
+
+        unsafe {
+            thread::sleep(Duration::from_millis(500));
+            assert!(!ON_MESSAGE_WAS_CALLED);
         }
     }
 }
