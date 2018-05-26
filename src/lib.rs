@@ -70,8 +70,7 @@ impl EventSource {
                     continue;
                 }
 
-                let event = parse_event(received);
-                pending_event = Some(event);
+                pending_event = update_event(pending_event, received);
             }
         });
 
@@ -90,22 +89,29 @@ impl EventSource {
 
 fn dispatch_event(listeners: &Arc<Mutex<HashMap<String, Vec<fn(Event)>>>>, event: &Event) {
     let listeners = listeners.lock().unwrap();
-    for listener in listeners.get(event.type_.as_str()).unwrap().iter() {
+    for listener in listeners.get("message").unwrap().iter() {
         listener(event.clone())
     }
 }
 
-// fn update_event(pending_event: Option<Event>, message: String) -> Option<Event> {
-//     let event = parse_event(message);
-//     Some(event)
-// }
+fn update_event(pending_event: Option<Event>, message: String) -> Option<Event> {
+    let mut event = match pending_event {
+        Some(e) => e.clone(),
+        None => Event { type_: String::from("message"), data: String::from("") }
+    };
 
-fn parse_event(message: String) -> Event {
-    let parts: Vec<&str> = message.split(":").collect();
-    Event {
-        type_: String::from("message"),
-        data: String::from(parts[1].trim())
+    match parse_field(&message) {
+        ("event", value) => event.type_ = String::from(value),
+        ("data", value) => event.data = String::from(value),
+        _ => ()
     }
+
+    Some(event)
+}
+
+fn parse_field<'a>(message: &'a String) -> (&'a str, &'a str) {
+    let parts: Vec<&str> = message.split(":").collect();
+    (parts[0], parts[1].trim())
 }
 
 fn open_connection(url: Url) -> Result<TcpStream, Error> {
@@ -306,7 +312,6 @@ data: this is a message\n\n"
 
         event_source.on_message(|event| {
             unsafe {
-                println!("{:?}", event);
                 IS_RIGHT_EVENT = event.type_ == String::from("myEvent");
                 IS_RIGHT_EVENT = IS_RIGHT_EVENT && event.data == String::from("my message");
             }
