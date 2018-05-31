@@ -11,8 +11,9 @@ use url::{Url, ParseError};
 
 mod network;
 
+
 pub struct EventSource {
-    listeners: Arc<Mutex<HashMap<String, Vec<fn(Event)>>>>
+    listeners: Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,12 +78,14 @@ impl EventSource {
         Ok(())
     }
 
-    pub fn on_message(&self, listener: fn(Event)) {
+    pub fn on_message<F>(&self, listener: F) where F: Fn(Event) + Send + 'static {
         self.add_event_listener("message", listener);
     }
 
-    pub fn add_event_listener(&self, event_type: &str, listener: fn(Event)) -> fn(Event) {
+    pub fn add_event_listener<F>(&self, event_type: &str, listener: F) where F: Fn(Event) + Send + 'static {
         let mut listeners = self.listeners.lock().unwrap();
+        let listener = Box::new(listener);
+
         if listeners.contains_key(event_type) {
             listeners.get_mut(event_type).unwrap().push(listener);
         } else {
@@ -91,7 +94,7 @@ impl EventSource {
     }
 }
 
-fn dispatch_event(listeners: &Arc<Mutex<HashMap<String, Vec<fn(Event)>>>>, event: &Event) {
+fn dispatch_event(listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>, event: &Event) {
     let listeners = listeners.lock().unwrap();
     if listeners.contains_key(&event.type_) {
         for listener in listeners.get(&event.type_).unwrap().iter() {
@@ -151,6 +154,27 @@ mod tests {
 
         if let Some(l) = listeners.get("message") {
             assert_eq!(l.len(), 2)
+        } else {
+            panic!("should contain listeners")
+        }
+    }
+
+    #[test]
+    fn accept_closure_as_listeners() {
+        let event_source = EventSource {
+            listeners: Arc::new(Mutex::new(HashMap::new()))
+        };
+
+        let something = "s";
+
+        event_source.on_message(move |_| {
+            println!("{}", something);
+        });
+
+        let listeners = event_source.listeners.lock().unwrap();
+
+        if let Some(l) = listeners.get("message") {
+            assert_eq!(l.len(), 1)
         } else {
             panic!("should contain listeners")
         }
