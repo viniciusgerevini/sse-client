@@ -88,26 +88,6 @@ impl EventSource {
         } else {
             listeners.insert(String::from(event_type), vec!(listener));
         }
-        return listener;
-    }
-
-    pub fn remove_event_listener(&self, event_type: &str, listener: fn(Event)) {
-        let mut listeners = self.listeners.lock().unwrap();
-        let mut listener_index = None;
-
-        if listeners.contains_key(event_type) {
-            for (i, l) in listeners.get(event_type).unwrap().iter().enumerate() {
-                if l == &listener {
-                    listener_index = Some(i);
-                    break;
-                }
-            }
-
-            if let Some(i) = listener_index {
-                let list = listeners.get_mut(event_type).unwrap();
-                list.remove(i);
-            }
-        }
     }
 }
 
@@ -348,25 +328,6 @@ data: my message\n\n"
         unsafe {
             thread::sleep(Duration::from_millis(500));
             assert!(!ON_MESSAGE_WAS_CALLED);
-        }
-    }
-
-    #[test]
-    fn remove_listener_for_event() {
-        let event_source = EventSource {
-            listeners: Arc::new(Mutex::new(HashMap::new()))
-        };
-
-        event_source.add_event_listener("my_event", |_| {});
-        let listener = event_source.add_event_listener("my_event", |_| {});
-        event_source.remove_event_listener("my_event", listener);
-
-        let listeners = event_source.listeners.lock().unwrap();
-
-        if let Some(l) = listeners.get("my_event") {
-            assert_eq!(l.len(), 1)
-        } else {
-            panic!("should contain listeners")
         }
     }
 }
