@@ -7,7 +7,6 @@ Client for event streams
 
 - on error callback
 - on open callback
-- close method
 - States (Open, Closed, Connecting)
 - Handle HTTP status code properly
 - Redirects
@@ -16,4 +15,5 @@ Client for event streams
 - Starting reconnection from last sent event
 - withCredentials option
 - Setting retry time
+- a better approach for dummy http server
 
