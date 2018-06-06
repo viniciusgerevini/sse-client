@@ -164,7 +164,8 @@ mod tests {
     #[test]
     fn should_create_client() {
         let tx = fake_server(String::from("127.0.0.1:6969"));
-        let _ = EventSource::new("http://127.0.0.1:6969/sub").unwrap();
+        let event_source = EventSource::new("http://127.0.0.1:6969/sub").unwrap();
+        event_source.close();
         tx.send("close").unwrap();
     }
 
@@ -191,6 +192,8 @@ mod tests {
         } else {
             panic!("should contain listeners")
         }
+
+        event_source.close();
         tx.send("close").unwrap();
     }
 
@@ -212,6 +215,8 @@ mod tests {
         } else {
             panic!("should contain listeners")
         }
+
+        event_source.close();
         tx.send("close").unwrap();
     }
 
@@ -242,6 +247,8 @@ mod tests {
             assert_eq!(CALL_COUNT, 1);
             assert!(IS_RIGHT_MESSAGE);
         }
+
+        event_source.close();
         tx.send("close").unwrap();
     }
 
@@ -269,6 +276,8 @@ data: this is a message\n\n").unwrap();
             thread::sleep(Duration::from_millis(500));
             assert_eq!(CALL_COUNT, 2);
         }
+
+        event_source.close();
         tx.send("close").unwrap();
     }
 
@@ -298,6 +307,7 @@ data: this is a message\n\n").unwrap();
             assert_eq!(CALL_COUNT, 1);
         }
 
+        event_source.close();
         tx.send("close").unwrap();
     }
 
@@ -325,6 +335,7 @@ data: this is a message\n\n").unwrap();
             assert_eq!(CALL_COUNT, 2);
         }
 
+        event_source.close();
         tx.send("close").unwrap();
     }
 
@@ -352,6 +363,7 @@ data: my message\n\n"
             assert!(IS_RIGHT_EVENT);
         }
 
+        event_source.close();
         tx.send("close").unwrap();
     }
 
@@ -378,6 +390,7 @@ data: my message\n\n"
             assert!(!ON_MESSAGE_WAS_CALLED);
         }
 
+        event_source.close();
         tx.send("close").unwrap();
     }
 
