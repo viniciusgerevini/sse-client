@@ -128,9 +128,38 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    use std::net::TcpListener;
+    use std::thread;
+    use std::sync::mpsc;
+
+    fn fake_server(address: String) -> std::sync::mpsc::Sender<&'static str>  {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let listener = TcpListener::bind(address).unwrap();
+
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+
+                for received in rx {
+                    match received {
+                        "close" => break,
+                        _ => {
+                            stream.write(received.as_bytes()).unwrap();
+                        }
+                    }
+                }
+                break;
+            }
+        });
+
+        tx
+    }
+
     #[test]
     fn should_create_client() {
-        let _ = EventSource::new("127.0.0.1:1236/sub");
+        let tx = fake_server(String::from("127.0.0.1:6969"));
+        let _ = EventSource::new("http://127.0.0.1:6969/sub").unwrap();
+        tx.send("close").unwrap();
     }
 
     #[test]
@@ -143,9 +172,8 @@ mod tests {
 
     #[test]
     fn should_register_listeners() {
-        let event_source = EventSource {
-            listeners: Arc::new(Mutex::new(HashMap::new()))
-        };
+        let tx = fake_server(String::from("127.0.0.1:6961"));
+        let event_source = EventSource::new("http://127.0.0.1:6961/sub").unwrap();
 
         event_source.on_message(|_| {});
         event_source.on_message(|_| {});
@@ -157,13 +185,13 @@ mod tests {
         } else {
             panic!("should contain listeners")
         }
+        tx.send("close").unwrap();
     }
 
     #[test]
     fn accept_closure_as_listeners() {
-        let event_source = EventSource {
-            listeners: Arc::new(Mutex::new(HashMap::new()))
-        };
+        let tx = fake_server(String::from("127.0.0.1:6962"));
+        let event_source = EventSource::new("http://127.0.0.1:6962/sub").unwrap();
 
         let something = "s";
 
@@ -178,6 +206,7 @@ mod tests {
         } else {
             panic!("should contain listeners")
         }
+        tx.send("close").unwrap();
     }
 
     #[test]
@@ -185,9 +214,8 @@ mod tests {
         static mut CALL_COUNT: i32 = 0;
         static mut IS_RIGHT_MESSAGE: bool = false;
 
-        let event_source = EventSource {
-            listeners: Arc::new(Mutex::new(HashMap::new()))
-        };
+        let tx = fake_server(String::from("127.0.0.1:6963"));
+        let event_source = EventSource::new("http://127.0.0.1:6963/sub").unwrap();
 
         event_source.on_message(|message| {
             unsafe {
@@ -196,8 +224,7 @@ mod tests {
             }
         });
 
-        let test_stream = ("\ndata: some message\n\n").as_bytes();
-        event_source.start(test_stream).unwrap();
+        tx.send("\ndata: some message\n\n").unwrap();
 
         unsafe {
             let mut retry_count = 0;
@@ -209,15 +236,16 @@ mod tests {
             assert_eq!(CALL_COUNT, 1);
             assert!(IS_RIGHT_MESSAGE);
         }
+        tx.send("close").unwrap();
     }
 
     #[test]
     fn should_not_trigger_listeners_for_comments() {
         static mut CALL_COUNT: i32 = 0;
 
-        let event_source = EventSource {
-            listeners: Arc::new(Mutex::new(HashMap::new()))
-        };
+        let tx = fake_server(String::from("127.0.0.1:6964"));
+        let event_source = EventSource::new("http://127.0.0.1:6964/sub").unwrap();
+
 
         event_source.on_message(|_| {
             unsafe {
@@ -225,28 +253,25 @@ mod tests {
             }
         });
 
-        let test_stream = "
+        tx.send("
 data: message\n
 :this is a comment
 :this is another comment
-data: this is a message\n\n"
-            .as_bytes();
-
-        event_source.start(test_stream).unwrap();
+data: this is a message\n\n").unwrap();
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
             assert_eq!(CALL_COUNT, 2);
         }
+        tx.send("close").unwrap();
     }
 
     #[test]
     fn ensure_stream_is_parsed_after_headers() {
         static mut CALL_COUNT: i32 = 0;
 
-        let event_source = EventSource {
-            listeners: Arc::new(Mutex::new(HashMap::new()))
-        };
+        let tx = fake_server(String::from("127.0.0.1:6965"));
+        let event_source = EventSource::new("http://127.0.0.1:6965/sub").unwrap();
 
         event_source.on_message(|_| {
             unsafe {
@@ -254,30 +279,28 @@ data: this is a message\n\n"
             }
         });
 
-        let test_stream = "HTTP/1.1 200 OK
+        tx.send("HTTP/1.1 200 OK
 Server: nginx/1.10.3
 Date: Thu, 24 May 2018 12:26:38 GMT
 Content-Type: text/event-stream; charset=utf-8
 Connection: keep-alive
 
-data: this is a message\n\n"
-            .as_bytes();
-
-        event_source.start(test_stream).unwrap();
+data: this is a message\n\n").unwrap();
 
         unsafe {
             thread::sleep(Duration::from_millis(300));
             assert_eq!(CALL_COUNT, 1);
         }
+
+        tx.send("close").unwrap();
     }
 
     #[test]
     fn ignore_empty_messages() {
         static mut CALL_COUNT: i32 = 0;
 
-        let event_source = EventSource {
-            listeners: Arc::new(Mutex::new(HashMap::new()))
-        };
+        let tx = fake_server(String::from("127.0.0.1:6966"));
+        let event_source = EventSource::new("http://127.0.0.1:6966/sub").unwrap();
 
         event_source.on_message(|_| {
             unsafe {
@@ -285,28 +308,26 @@ data: this is a message\n\n"
             }
         });
 
-        let test_stream = "
+        tx.send("
 data: message
 
 
-data: this is a message\n\n"
-            .as_bytes();
-
-        event_source.start(test_stream).unwrap();
+data: this is a message\n\n").unwrap();
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
             assert_eq!(CALL_COUNT, 2);
         }
+
+        tx.send("close").unwrap();
     }
 
     #[test]
     fn event_trigger_its_defined_listener() {
         static mut IS_RIGHT_EVENT: bool = false;
 
-        let event_source = EventSource {
-            listeners: Arc::new(Mutex::new(HashMap::new()))
-        };
+        let tx = fake_server(String::from("127.0.0.1:6967"));
+        let event_source = EventSource::new("http://127.0.0.1:6967/sub").unwrap();
 
         event_source.add_event_listener("myEvent", |event| {
             unsafe {
@@ -315,26 +336,25 @@ data: this is a message\n\n"
             }
         });
 
-        let test_stream = "
+        tx.send("
 event: myEvent
 data: my message\n\n"
-            .as_bytes();
-
-        event_source.start(test_stream).unwrap();
+).unwrap();
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
             assert!(IS_RIGHT_EVENT);
         }
+
+        tx.send("close").unwrap();
     }
 
     #[test]
     fn dont_trigger_on_message_for_event() {
         static mut ON_MESSAGE_WAS_CALLED: bool = false;
 
-        let event_source = EventSource {
-            listeners: Arc::new(Mutex::new(HashMap::new()))
-        };
+        let tx = fake_server(String::from("127.0.0.1:6968"));
+        let event_source = EventSource::new("http://127.0.0.1:6968/sub").unwrap();
 
         event_source.on_message(|_| {
             unsafe {
@@ -342,16 +362,16 @@ data: my message\n\n"
             }
         });
 
-        let test_stream = "
+        tx.send("
 event: myEvent
 data: my message\n\n"
-            .as_bytes();
-
-        event_source.start(test_stream).unwrap();
+).unwrap();
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
             assert!(!ON_MESSAGE_WAS_CALLED);
         }
+
+        tx.send("close").unwrap();
     }
 }
