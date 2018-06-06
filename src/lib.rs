@@ -8,12 +8,14 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::collections::HashMap;
 use url::{Url, ParseError};
+use std::net::{Shutdown, TcpStream};
 
 mod network;
 
 
 pub struct EventSource {
     listeners: Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>,
+    stream: TcpStream
 }
 
 #[derive(Debug, Clone)]
@@ -25,10 +27,10 @@ pub struct Event {
 impl EventSource {
     pub fn new(url: &str) -> Result<EventSource, ParseError> {
         let stream = network::open_connection(Url::parse(url)?).unwrap();
-        let reader = BufReader::new(stream);
+        let reader = BufReader::new(stream.try_clone().unwrap());
 
         let listeners = Arc::new(Mutex::new(HashMap::new()));
-        let event_source = EventSource{ listeners };
+        let event_source = EventSource{ listeners, stream };
 
         event_source.start(reader)?;
 
@@ -76,6 +78,10 @@ impl EventSource {
         });
 
         Ok(())
+    }
+
+    pub fn close(&self) {
+        self.stream.shutdown(Shutdown::Both).unwrap();
     }
 
     pub fn on_message<F>(&self, listener: F) where F: Fn(Event) + Send + 'static {
@@ -370,6 +376,33 @@ data: my message\n\n"
         unsafe {
             thread::sleep(Duration::from_millis(500));
             assert!(!ON_MESSAGE_WAS_CALLED);
+        }
+
+        tx.send("close").unwrap();
+    }
+
+    #[test]
+    fn should_close_connection() {
+        static mut CALL_COUNT: i32 = 0;
+
+        let tx = fake_server(String::from("127.0.0.1:6970"));
+        let event_source = EventSource::new("http://127.0.0.1:6970/sub").unwrap();
+
+        event_source.on_message(|_| {
+            unsafe {
+                CALL_COUNT += 1;
+            }
+        });
+
+        tx.send("\ndata: some message\n\n").unwrap();
+        thread::sleep(Duration::from_millis(200));
+        event_source.close();
+        tx.send("\ndata: some message\n\n").unwrap();
+
+        unsafe {
+            thread::sleep(Duration::from_millis(400));
+
+            assert_eq!(CALL_COUNT, 1);
         }
 
         tx.send("close").unwrap();
