@@ -15,6 +15,7 @@ mod network;
 
 pub struct EventSource {
     listeners: Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>,
+    on_open_listeners: Arc<Mutex<Vec<Box<Fn() + Send>>>>,
     stream: TcpStream
 }
 
@@ -30,7 +31,12 @@ impl EventSource {
         let reader = BufReader::new(stream.try_clone().unwrap());
 
         let listeners = Arc::new(Mutex::new(HashMap::new()));
-        let event_source = EventSource{ listeners, stream };
+        let on_open_listeners = Arc::new(Mutex::new(vec!()));
+        let event_source = EventSource{
+            listeners,
+            stream,
+            on_open_listeners
+        };
 
         event_source.start(reader)?;
 
@@ -40,6 +46,7 @@ impl EventSource {
     fn start<R: BufRead + Send + 'static>(&self, reader: R) -> Result<(), ParseError> {
         let (tx, rx) = mpsc::channel();
 
+        let on_open_listeners = Arc::clone(&self.on_open_listeners);
         thread::spawn(move || {
             let mut body_started = false;
 
@@ -48,6 +55,7 @@ impl EventSource {
 
                 if !body_started {
                     body_started = line == "";
+                    dispatch_open_event(&on_open_listeners);
                     continue;
                 }
 
@@ -84,6 +92,11 @@ impl EventSource {
         self.stream.shutdown(Shutdown::Both).unwrap();
     }
 
+    pub fn on_open<F>(&self, listener: F) where F: Fn() + Send + 'static {
+        let mut listeners = self.on_open_listeners.lock().unwrap();
+        listeners.push(Box::new(listener));
+    }
+
     pub fn on_message<F>(&self, listener: F) where F: Fn(Event) + Send + 'static {
         self.add_event_listener("message", listener);
     }
@@ -106,6 +119,13 @@ fn dispatch_event(listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send
         for listener in listeners.get(&event.type_).unwrap().iter() {
             listener(event.clone())
         }
+    }
+}
+
+fn dispatch_open_event(listeners: &Arc<Mutex<Vec<Box<Fn() + Send>>>>) {
+    let listeners = listeners.lock().unwrap();
+    for listener in listeners.iter() {
+        listener()
     }
 }
 
@@ -416,6 +436,27 @@ mod tests {
             assert_eq!(CALL_COUNT, 1);
         }
 
+        tx.send("close").unwrap();
+    }
+
+    #[test]
+    fn should_trigger_on_open_callback_when_connected() {
+        static mut CONNECTION_OPEN: bool = false;
+
+        let tx = fake_server(String::from("127.0.0.1:6971"));
+        let event_source = EventSource::new("http://127.0.0.1:6971/sub").unwrap();
+        event_source.on_open(|| {
+            unsafe {
+                CONNECTION_OPEN = true;
+            }
+        });
+
+        tx.send("\n").unwrap();
+        unsafe {
+            thread::sleep(Duration::from_millis(200));
+            assert!(CONNECTION_OPEN);
+        }
+        event_source.close();
         tx.send("close").unwrap();
     }
 }
