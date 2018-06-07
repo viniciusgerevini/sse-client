@@ -266,11 +266,11 @@ mod tests {
             }
         });
 
-        tx.send("
-data: message\n
-:this is a comment
-:this is another comment
-data: this is a message\n\n").unwrap();
+        tx.send("\n").unwrap();
+        tx.send("data: message\n\n").unwrap();
+        tx.send(":this is a comment\n").unwrap();
+        tx.send(":this is another comment\n").unwrap();
+        tx.send("data: this is a message\n\n").unwrap();
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
@@ -294,13 +294,13 @@ data: this is a message\n\n").unwrap();
             }
         });
 
-        tx.send("HTTP/1.1 200 OK
-Server: nginx/1.10.3
-Date: Thu, 24 May 2018 12:26:38 GMT
-Content-Type: text/event-stream; charset=utf-8
-Connection: keep-alive
-
-data: this is a message\n\n").unwrap();
+        tx.send("HTTP/1.1 200 OK\n").unwrap();
+        tx.send("Server: nginx/1.10.3\n").unwrap();
+        tx.send("Date: Thu, 24 May 2018 12:26:38 GMT\n").unwrap();
+        tx.send("Content-Type: text/event-stream; charset=utf-8\n").unwrap();
+        tx.send("Connection: keep-alive\n").unwrap();
+        tx.send("\n").unwrap();
+        tx.send("data: this is a message\n\n").unwrap();
 
         unsafe {
             thread::sleep(Duration::from_millis(300));
@@ -324,11 +324,11 @@ data: this is a message\n\n").unwrap();
             }
         });
 
-        tx.send("
-data: message
-
-
-data: this is a message\n\n").unwrap();
+        tx.send("\n").unwrap();
+        tx.send("data: message\n").unwrap();
+        tx.send("\n").unwrap();
+        tx.send("\n").unwrap();
+        tx.send("data: this is a message\n\n").unwrap();
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
@@ -353,10 +353,9 @@ data: this is a message\n\n").unwrap();
             }
         });
 
-        tx.send("
-event: myEvent
-data: my message\n\n"
-).unwrap();
+        tx.send("\n").unwrap();
+        tx.send("event: myEvent\n").unwrap();
+        tx.send("data: my message\n\n").unwrap();
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
@@ -380,10 +379,9 @@ data: my message\n\n"
             }
         });
 
-        tx.send("
-event: myEvent
-data: my message\n\n"
-).unwrap();
+        tx.send("\n").unwrap();
+        tx.send("event: myEvent\n").unwrap();
+        tx.send("data: my message\n\n").unwrap();
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
