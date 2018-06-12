@@ -38,37 +38,16 @@ impl EventSource {
 
         let listeners = Arc::new(Mutex::new(HashMap::new()));
         let on_open_listeners = Arc::new(Mutex::new(vec!()));
-        let event_source = EventSource{
-            ready_state: Arc::new(Mutex::new(State::CONNECTING)),
-            listeners,
-            stream: stream.try_clone().unwrap(),
-            on_open_listeners
-        };
+        let ready_state = Arc::new(Mutex::new(State::CONNECTING));
 
-        event_source.start(stream);
+        listen_to_stream(
+            stream.try_clone().unwrap(),
+            Arc::clone(&ready_state),
+            Arc::clone(&listeners),
+            Arc::clone(&on_open_listeners)
+        );
 
-        Ok(event_source)
-    }
-
-    fn start(&self, stream: TcpStream) {
-        let on_open_listeners = Arc::clone(&self.on_open_listeners);
-        let state = Arc::clone(&self.ready_state);
-        let listeners = Arc::clone(&self.listeners);
-
-        thread::spawn(move || {
-            let reader = BufReader::new(stream.try_clone().unwrap());
-            let mut pending_event: Option<Event> = None;
-
-            for line in reader.lines() {
-                let line = line.unwrap();
-                let mut state = state.lock().unwrap();
-
-                match *state {
-                    State::CONNECTING => *state = handle_stream_header(line, &on_open_listeners),
-                    _ => pending_event = handle_stream_body(pending_event, line, &listeners)
-                }
-            }
-        });
+        Ok(EventSource{ ready_state, listeners, stream: stream, on_open_listeners })
     }
 
     pub fn close(&self) {
@@ -96,6 +75,28 @@ impl EventSource {
             listeners.insert(String::from(event_type), vec!(listener));
         }
     }
+}
+
+fn listen_to_stream(
+    stream: TcpStream,
+    state: Arc<Mutex<State>>,
+    listeners: Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>,
+    on_open_listeners: Arc<Mutex<Vec<Box<Fn() + Send>>>>
+) {
+    thread::spawn(move || {
+        let reader = BufReader::new(stream.try_clone().unwrap());
+        let mut pending_event: Option<Event> = None;
+
+        for line in reader.lines() {
+            let line = line.unwrap();
+            let mut state = state.lock().unwrap();
+
+            match *state {
+                State::CONNECTING => *state = handle_stream_header(line, &on_open_listeners),
+                _ => pending_event = handle_stream_body(pending_event, line, &listeners)
+            }
+        }
+    });
 }
 
 fn handle_stream_header(line: String, listeners: &Arc<Mutex<Vec<Box<Fn() + Send>>>>) -> State {
