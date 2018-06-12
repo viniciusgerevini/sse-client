@@ -3,7 +3,6 @@ extern crate url;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::thread;
-use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::collections::HashMap;
@@ -53,13 +52,13 @@ impl EventSource {
     }
 
     fn start<R: BufRead + Send + 'static>(&self, reader: R) -> Result<(), ParseError> {
-        let (tx, rx) = mpsc::channel();
-
         let on_open_listeners = Arc::clone(&self.on_open_listeners);
         let state = Arc::clone(&self.ready_state);
+        let listeners = Arc::clone(&self.listeners);
 
         thread::spawn(move || {
             let mut body_started = false;
+            let mut pending_event: Option<Event> = None;
 
             for line in reader.lines() {
                 let line = line.unwrap();
@@ -73,21 +72,11 @@ impl EventSource {
                     continue;
                 }
 
-                tx.send(line).unwrap();
-            }
-        });
-
-        let listeners = Arc::clone(&self.listeners);
-
-        thread::spawn(move || {
-            let mut pending_event: Option<Event> = None;
-
-            for received in rx {
-                if received.starts_with(":") {
+                if line.starts_with(":") {
                     continue;
                 }
 
-                if received == "" {
+                if line == "" {
                     if let Some(e) = pending_event {
                         dispatch_event(&listeners, &e);
                         pending_event = None;
@@ -95,7 +84,7 @@ impl EventSource {
                     continue;
                 }
 
-                pending_event = update_event(pending_event, received);
+                pending_event = update_event(pending_event, line);
             }
         });
 
