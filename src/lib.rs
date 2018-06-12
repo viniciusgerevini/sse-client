@@ -57,38 +57,16 @@ impl EventSource {
         let listeners = Arc::clone(&self.listeners);
 
         thread::spawn(move || {
-            let mut body_started = false;
             let mut pending_event: Option<Event> = None;
 
             for line in reader.lines() {
                 let line = line.unwrap();
+                let mut state = state.lock().unwrap();
 
-                if !body_started && line == "" {
-                    body_started = true;
-                    dispatch_open_event(&on_open_listeners);
-
-                    let mut state = state.lock().unwrap();
-                    *state = State::OPEN;
-                    continue;
+                match *state {
+                    State::CONNECTING => *state = handle_stream_header(line, &on_open_listeners),
+                    _ => pending_event = handle_stream_body(pending_event, line, &listeners)
                 }
-
-                if !body_started {
-                    continue;
-                }
-
-                if line.starts_with(":") {
-                    continue;
-                }
-
-                if line == "" {
-                    if let Some(e) = pending_event {
-                        dispatch_event(&listeners, &e);
-                        pending_event = None;
-                    }
-                    continue;
-                }
-
-                pending_event = update_event(pending_event, line);
             }
         });
 
@@ -120,6 +98,33 @@ impl EventSource {
             listeners.insert(String::from(event_type), vec!(listener));
         }
     }
+}
+
+fn handle_stream_header(line: String, listeners: &Arc<Mutex<Vec<Box<Fn() + Send>>>>) -> State {
+    if line == "" {
+        dispatch_open_event(listeners);
+        State::OPEN
+    } else {
+        State::CONNECTING
+    }
+}
+
+fn handle_stream_body(
+    pending_event: Option<Event>,
+    line: String,
+    listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>
+) -> Option<Event> {
+    let mut event = None;
+
+    if line == "" {
+        if let Some(e) = pending_event {
+            dispatch_event(listeners, &e);
+        }
+    } else if !line.starts_with(":") {
+        event = update_event(pending_event, line);
+    }
+
+    event
 }
 
 fn dispatch_event(listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>, event: &Event) {
