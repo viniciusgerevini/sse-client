@@ -51,12 +51,12 @@ impl EventSource {
     }
 
     fn start(&self, stream: TcpStream) -> Result<(), ParseError> {
-        let reader = BufReader::new(stream.try_clone().unwrap());
         let on_open_listeners = Arc::clone(&self.on_open_listeners);
         let state = Arc::clone(&self.ready_state);
         let listeners = Arc::clone(&self.listeners);
 
         thread::spawn(move || {
+            let reader = BufReader::new(stream.try_clone().unwrap());
             let mut pending_event: Option<Event> = None;
 
             for line in reader.lines() {
