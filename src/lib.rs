@@ -45,12 +45,12 @@ impl EventSource {
             on_open_listeners
         };
 
-        event_source.start(stream)?;
+        event_source.start(stream);
 
         Ok(event_source)
     }
 
-    fn start(&self, stream: TcpStream) -> Result<(), ParseError> {
+    fn start(&self, stream: TcpStream) {
         let on_open_listeners = Arc::clone(&self.on_open_listeners);
         let state = Arc::clone(&self.ready_state);
         let listeners = Arc::clone(&self.listeners);
@@ -69,8 +69,6 @@ impl EventSource {
                 }
             }
         });
-
-        Ok(())
     }
 
     pub fn close(&self) {
