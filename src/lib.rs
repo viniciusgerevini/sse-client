@@ -63,12 +63,16 @@ impl EventSource {
             for line in reader.lines() {
                 let line = line.unwrap();
 
-                if !body_started {
-                    body_started = line == "";
+                if !body_started && line == "" {
+                    body_started = true;
                     dispatch_open_event(&on_open_listeners);
 
                     let mut state = state.lock().unwrap();
                     *state = State::OPEN;
+                    continue;
+                }
+
+                if !body_started {
                     continue;
                 }
 
@@ -447,19 +451,24 @@ mod tests {
     #[test]
     fn should_trigger_on_open_callback_when_connected() {
         static mut CONNECTION_OPEN: bool = false;
+        static mut OPEN_CALLBACK_CALLS: i32 = 0;
 
         let tx = fake_server(String::from("127.0.0.1:6971"));
         let event_source = EventSource::new("http://127.0.0.1:6971/sub").unwrap();
         event_source.on_open(|| {
             unsafe {
                 CONNECTION_OPEN = true;
+                OPEN_CALLBACK_CALLS += 1;
             }
         });
 
+        tx.send("HTTP/1.1 200 OK\n").unwrap();
+        tx.send("Date: Thu, 24 May 2018 12:26:38 GMT\n").unwrap();
         tx.send("\n").unwrap();
         unsafe {
             thread::sleep(Duration::from_millis(200));
             assert!(CONNECTION_OPEN);
+            assert_eq!(OPEN_CALLBACK_CALLS, 1);
         }
         event_source.close();
         tx.send("close").unwrap();
