@@ -14,6 +14,7 @@ mod network;
 
 
 pub struct EventSource {
+    pub ready_state: Arc<Mutex<State>>,
     listeners: Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>,
     on_open_listeners: Arc<Mutex<Vec<Box<Fn() + Send>>>>,
     stream: TcpStream
@@ -25,6 +26,13 @@ pub struct Event {
     data: String
 }
 
+#[derive(Debug, PartialEq)]
+pub enum State {
+    CONNECTING,
+    OPEN,
+    CLOSED
+}
+
 impl EventSource {
     pub fn new(url: &str) -> Result<EventSource, ParseError> {
         let stream = network::open_connection(Url::parse(url)?).unwrap();
@@ -33,6 +41,7 @@ impl EventSource {
         let listeners = Arc::new(Mutex::new(HashMap::new()));
         let on_open_listeners = Arc::new(Mutex::new(vec!()));
         let event_source = EventSource{
+            ready_state: Arc::new(Mutex::new(State::CONNECTING)),
             listeners,
             stream,
             on_open_listeners
@@ -47,6 +56,8 @@ impl EventSource {
         let (tx, rx) = mpsc::channel();
 
         let on_open_listeners = Arc::clone(&self.on_open_listeners);
+        let state = Arc::clone(&self.ready_state);
+
         thread::spawn(move || {
             let mut body_started = false;
 
@@ -56,6 +67,9 @@ impl EventSource {
                 if !body_started {
                     body_started = line == "";
                     dispatch_open_event(&on_open_listeners);
+
+                    let mut state = state.lock().unwrap();
+                    *state = State::OPEN;
                     continue;
                 }
 
@@ -90,6 +104,8 @@ impl EventSource {
 
     pub fn close(&self) {
         self.stream.shutdown(Shutdown::Both).unwrap();
+        let mut state = self.ready_state.lock().unwrap();
+        *state = State::CLOSED;
     }
 
     pub fn on_open<F>(&self, listener: F) where F: Fn() + Send + 'static {
@@ -457,6 +473,47 @@ mod tests {
             assert!(CONNECTION_OPEN);
         }
         event_source.close();
+        tx.send("close").unwrap();
+    }
+
+    #[test]
+    fn should_have_status_connecting_while_opening_connection() {
+        let tx = fake_server(String::from("127.0.0.1:6972"));
+        let event_source = EventSource::new("http://127.0.0.1:6972/sub").unwrap();
+
+        let state = event_source.ready_state.lock().unwrap();
+
+        assert_eq!(*state, State::CONNECTING);
+
+        event_source.close();
+        tx.send("close").unwrap();
+    }
+
+    #[test]
+    fn should_have_status_open_after_connection_stabilished() {
+        let tx = fake_server(String::from("127.0.0.1:6973"));
+        let event_source = EventSource::new("http://127.0.0.1:6973/sub").unwrap();
+
+        tx.send("\n").unwrap();
+        thread::sleep(Duration::from_millis(200));
+
+        let state = event_source.ready_state.lock().unwrap();
+
+        assert_eq!(*state, State::OPEN);
+
+        event_source.close();
+        tx.send("close").unwrap();
+    }
+
+    #[test]
+    fn should_have_status_closed_after_closing_connection() {
+        let tx = fake_server(String::from("127.0.0.1:6974"));
+        let event_source = EventSource::new("http://127.0.0.1:6974/sub").unwrap();
+
+        event_source.close();
+        thread::sleep(Duration::from_millis(200));
+        let state = event_source.ready_state.lock().unwrap();
+        assert_eq!(*state, State::CLOSED);
         tx.send("close").unwrap();
     }
 }
