@@ -481,9 +481,10 @@ mod tests {
         let tx = fake_server(String::from("127.0.0.1:6972"));
         let event_source = EventSource::new("http://127.0.0.1:6972/sub").unwrap();
 
-        let state = event_source.ready_state.lock().unwrap();
-
-        assert_eq!(*state, State::CONNECTING);
+        {
+            let state = event_source.ready_state.lock().unwrap();
+            assert_eq!(*state, State::CONNECTING);
+        }
 
         event_source.close();
         tx.send("close").unwrap();
@@ -497,9 +498,12 @@ mod tests {
         tx.send("\n").unwrap();
         thread::sleep(Duration::from_millis(200));
 
-        let state = event_source.ready_state.lock().unwrap();
+        {
+            let state = event_source.ready_state.lock().unwrap();
+            assert_eq!(*state, State::OPEN);
+        }
 
-        assert_eq!(*state, State::OPEN);
+
 
         event_source.close();
         tx.send("close").unwrap();
@@ -512,8 +516,10 @@ mod tests {
 
         event_source.close();
         thread::sleep(Duration::from_millis(200));
-        let state = event_source.ready_state.lock().unwrap();
-        assert_eq!(*state, State::CLOSED);
+        {
+            let state = event_source.ready_state.lock().unwrap();
+            assert_eq!(*state, State::CLOSED);
+        }
         tx.send("close").unwrap();
     }
 }
