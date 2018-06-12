@@ -35,23 +35,23 @@ pub enum State {
 impl EventSource {
     pub fn new(url: &str) -> Result<EventSource, ParseError> {
         let stream = network::open_connection(Url::parse(url)?).unwrap();
-        let reader = BufReader::new(stream.try_clone().unwrap());
 
         let listeners = Arc::new(Mutex::new(HashMap::new()));
         let on_open_listeners = Arc::new(Mutex::new(vec!()));
         let event_source = EventSource{
             ready_state: Arc::new(Mutex::new(State::CONNECTING)),
             listeners,
-            stream,
+            stream: stream.try_clone().unwrap(),
             on_open_listeners
         };
 
-        event_source.start(reader)?;
+        event_source.start(stream)?;
 
         Ok(event_source)
     }
 
-    fn start<R: BufRead + Send + 'static>(&self, reader: R) -> Result<(), ParseError> {
+    fn start(&self, stream: TcpStream) -> Result<(), ParseError> {
+        let reader = BufReader::new(stream.try_clone().unwrap());
         let on_open_listeners = Arc::clone(&self.on_open_listeners);
         let state = Arc::clone(&self.ready_state);
         let listeners = Arc::clone(&self.listeners);
