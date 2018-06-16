@@ -171,35 +171,62 @@ mod tests {
     use std::thread;
     use std::sync::mpsc;
 
-    fn fake_server(address: String) -> std::sync::mpsc::Sender<&'static str>  {
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let listener = TcpListener::bind(address).unwrap();
+    struct FakeServer {
+        address: String,
+        client_tx: std::sync::mpsc::Sender<&'static str>
+    }
 
-            for stream in listener.incoming() {
-                let mut stream = stream.unwrap();
+    impl FakeServer {
+        pub fn new(address: String) -> FakeServer {
+            let (client_tx, server_rx) = mpsc::channel();
+            let (server_tx, client_rx) = mpsc::channel();
 
-                for received in rx {
-                    match received {
-                        "close" => break,
-                        _ => {
-                            stream.write(received.as_bytes()).unwrap();
+            let socket_address = address.clone();
+
+            thread::spawn(move || {
+                let listener = TcpListener::bind(socket_address).unwrap();
+                server_tx.send("server_ready").unwrap();
+                for stream in listener.incoming() {
+                    let mut stream = stream.unwrap();
+
+                    for received in server_rx {
+                        match received {
+                            "close" => break,
+                            _ => {
+                                stream.write(received.as_bytes()).unwrap();
+                            }
                         }
                     }
+                    break;
                 }
-                break;
-            }
-        });
+            });
 
-        tx
+            client_rx.recv().unwrap();
+
+            FakeServer {
+                address,
+                client_tx
+            }
+        }
+
+        pub fn send(&self, message: &'static str) {
+            &self.client_tx.send(message).unwrap();
+        }
+
+        pub fn close(&self) {
+            &self.client_tx.send("close").unwrap();
+        }
     }
 
     #[test]
     fn should_create_client() {
-        let tx = fake_server(String::from("127.0.0.1:6969"));
-        let event_source = EventSource::new("http://127.0.0.1:6969/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6969"));
+        let address = format!("http://{}/sub", fake_server.address);
+
+        let event_source = EventSource::new(address.as_str()).unwrap();
         event_source.close();
-        tx.send("close").unwrap();
+
+        fake_server.close();
     }
 
     #[test]
@@ -212,8 +239,9 @@ mod tests {
 
     #[test]
     fn should_register_listeners() {
-        let tx = fake_server(String::from("127.0.0.1:6961"));
-        let event_source = EventSource::new("http://127.0.0.1:6961/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6961"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         event_source.on_message(|_| {});
         event_source.on_message(|_| {});
@@ -227,13 +255,14 @@ mod tests {
         }
 
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
     fn accept_closure_as_listeners() {
-        let tx = fake_server(String::from("127.0.0.1:6962"));
-        let event_source = EventSource::new("http://127.0.0.1:6962/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6962"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         let something = "s";
 
@@ -250,7 +279,7 @@ mod tests {
         }
 
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
@@ -258,8 +287,9 @@ mod tests {
         static mut CALL_COUNT: i32 = 0;
         static mut IS_RIGHT_MESSAGE: bool = false;
 
-        let tx = fake_server(String::from("127.0.0.1:6963"));
-        let event_source = EventSource::new("http://127.0.0.1:6963/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6963"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         event_source.on_message(|message| {
             unsafe {
@@ -268,7 +298,7 @@ mod tests {
             }
         });
 
-        tx.send("\ndata: some message\n\n").unwrap();
+        fake_server.send("\ndata: some message\n\n");
 
         unsafe {
             let mut retry_count = 0;
@@ -282,16 +312,16 @@ mod tests {
         }
 
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
     fn should_not_trigger_listeners_for_comments() {
         static mut CALL_COUNT: i32 = 0;
 
-        let tx = fake_server(String::from("127.0.0.1:6964"));
-        let event_source = EventSource::new("http://127.0.0.1:6964/sub").unwrap();
-
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6964"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         event_source.on_message(|_| {
             unsafe {
@@ -299,11 +329,11 @@ mod tests {
             }
         });
 
-        tx.send("\n").unwrap();
-        tx.send("data: message\n\n").unwrap();
-        tx.send(":this is a comment\n").unwrap();
-        tx.send(":this is another comment\n").unwrap();
-        tx.send("data: this is a message\n\n").unwrap();
+        fake_server.send("\n");
+        fake_server.send("data: message\n\n");
+        fake_server.send(":this is a comment\n");
+        fake_server.send(":this is another comment\n");
+        fake_server.send("data: this is a message\n\n");
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
@@ -311,15 +341,16 @@ mod tests {
         }
 
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
     fn ensure_stream_is_parsed_after_headers() {
         static mut CALL_COUNT: i32 = 0;
 
-        let tx = fake_server(String::from("127.0.0.1:6965"));
-        let event_source = EventSource::new("http://127.0.0.1:6965/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6965"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         event_source.on_message(|_| {
             unsafe {
@@ -327,13 +358,13 @@ mod tests {
             }
         });
 
-        tx.send("HTTP/1.1 200 OK\n").unwrap();
-        tx.send("Server: nginx/1.10.3\n").unwrap();
-        tx.send("Date: Thu, 24 May 2018 12:26:38 GMT\n").unwrap();
-        tx.send("Content-Type: text/event-stream; charset=utf-8\n").unwrap();
-        tx.send("Connection: keep-alive\n").unwrap();
-        tx.send("\n").unwrap();
-        tx.send("data: this is a message\n\n").unwrap();
+        fake_server.send("HTTP/1.1 200 OK\n");
+        fake_server.send("Server: nginx/1.10.3\n");
+        fake_server.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
+        fake_server.send("Content-Type: text/event-stream; charset=utf-8\n");
+        fake_server.send("Connection: keep-alive\n");
+        fake_server.send("\n");
+        fake_server.send("data: this is a message\n\n");
 
         unsafe {
             thread::sleep(Duration::from_millis(300));
@@ -341,15 +372,16 @@ mod tests {
         }
 
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
     fn ignore_empty_messages() {
         static mut CALL_COUNT: i32 = 0;
 
-        let tx = fake_server(String::from("127.0.0.1:6966"));
-        let event_source = EventSource::new("http://127.0.0.1:6966/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6966"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         event_source.on_message(|_| {
             unsafe {
@@ -357,11 +389,11 @@ mod tests {
             }
         });
 
-        tx.send("\n").unwrap();
-        tx.send("data: message\n").unwrap();
-        tx.send("\n").unwrap();
-        tx.send("\n").unwrap();
-        tx.send("data: this is a message\n\n").unwrap();
+        fake_server.send("\n");
+        fake_server.send("data: message\n");
+        fake_server.send("\n");
+        fake_server.send("\n");
+        fake_server.send("data: this is a message\n\n");
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
@@ -369,15 +401,16 @@ mod tests {
         }
 
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
     fn event_trigger_its_defined_listener() {
         static mut IS_RIGHT_EVENT: bool = false;
 
-        let tx = fake_server(String::from("127.0.0.1:6967"));
-        let event_source = EventSource::new("http://127.0.0.1:6967/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6967"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         event_source.add_event_listener("myEvent", |event| {
             unsafe {
@@ -386,9 +419,9 @@ mod tests {
             }
         });
 
-        tx.send("\n").unwrap();
-        tx.send("event: myEvent\n").unwrap();
-        tx.send("data: my message\n\n").unwrap();
+        fake_server.send("\n");
+        fake_server.send("event: myEvent\n");
+        fake_server.send("data: my message\n\n");
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
@@ -396,15 +429,16 @@ mod tests {
         }
 
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
     fn dont_trigger_on_message_for_event() {
         static mut ON_MESSAGE_WAS_CALLED: bool = false;
 
-        let tx = fake_server(String::from("127.0.0.1:6968"));
-        let event_source = EventSource::new("http://127.0.0.1:6968/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6968"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         event_source.on_message(|_| {
             unsafe {
@@ -412,9 +446,9 @@ mod tests {
             }
         });
 
-        tx.send("\n").unwrap();
-        tx.send("event: myEvent\n").unwrap();
-        tx.send("data: my message\n\n").unwrap();
+        fake_server.send("\n");
+        fake_server.send("event: myEvent\n");
+        fake_server.send("data: my message\n\n");
 
         unsafe {
             thread::sleep(Duration::from_millis(500));
@@ -422,15 +456,16 @@ mod tests {
         }
 
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
     fn should_close_connection() {
         static mut CALL_COUNT: i32 = 0;
 
-        let tx = fake_server(String::from("127.0.0.1:6970"));
-        let event_source = EventSource::new("http://127.0.0.1:6970/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6970"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         event_source.on_message(|_| {
             unsafe {
@@ -438,10 +473,10 @@ mod tests {
             }
         });
 
-        tx.send("\ndata: some message\n\n").unwrap();
+        fake_server.send("\ndata: some message\n\n");
         thread::sleep(Duration::from_millis(200));
         event_source.close();
-        tx.send("\ndata: some message\n\n").unwrap();
+        fake_server.send("\ndata: some message\n\n");
 
         unsafe {
             thread::sleep(Duration::from_millis(400));
@@ -449,7 +484,7 @@ mod tests {
             assert_eq!(CALL_COUNT, 1);
         }
 
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
@@ -457,8 +492,10 @@ mod tests {
         static mut CONNECTION_OPEN: bool = false;
         static mut OPEN_CALLBACK_CALLS: i32 = 0;
 
-        let tx = fake_server(String::from("127.0.0.1:6971"));
-        let event_source = EventSource::new("http://127.0.0.1:6971/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6971"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
+
         event_source.on_open(|| {
             unsafe {
                 CONNECTION_OPEN = true;
@@ -466,22 +503,23 @@ mod tests {
             }
         });
 
-        tx.send("HTTP/1.1 200 OK\n").unwrap();
-        tx.send("Date: Thu, 24 May 2018 12:26:38 GMT\n").unwrap();
-        tx.send("\n").unwrap();
+        fake_server.send("HTTP/1.1 200 OK\n");
+        fake_server.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
+        fake_server.send("\n");
         unsafe {
             thread::sleep(Duration::from_millis(200));
             assert!(CONNECTION_OPEN);
             assert_eq!(OPEN_CALLBACK_CALLS, 1);
         }
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
     fn should_have_status_connecting_while_opening_connection() {
-        let tx = fake_server(String::from("127.0.0.1:6972"));
-        let event_source = EventSource::new("http://127.0.0.1:6972/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6972"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         {
             let state = event_source.ready_state.lock().unwrap();
@@ -489,15 +527,16 @@ mod tests {
         }
 
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
     fn should_have_status_open_after_connection_stabilished() {
-        let tx = fake_server(String::from("127.0.0.1:6973"));
-        let event_source = EventSource::new("http://127.0.0.1:6973/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6973"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
-        tx.send("\n").unwrap();
+        fake_server.send("\n");
         thread::sleep(Duration::from_millis(200));
 
         {
@@ -505,16 +544,15 @@ mod tests {
             assert_eq!(*state, State::OPEN);
         }
 
-
-
         event_source.close();
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 
     #[test]
     fn should_have_status_closed_after_closing_connection() {
-        let tx = fake_server(String::from("127.0.0.1:6974"));
-        let event_source = EventSource::new("http://127.0.0.1:6974/sub").unwrap();
+        let fake_server = FakeServer::new(String::from("127.0.0.1:6974"));
+        let address = format!("http://{}/sub", fake_server.address);
+        let event_source = EventSource::new(address.as_str()).unwrap();
 
         event_source.close();
         thread::sleep(Duration::from_millis(200));
@@ -522,6 +560,6 @@ mod tests {
             let state = event_source.ready_state.lock().unwrap();
             assert_eq!(*state, State::CLOSED);
         }
-        tx.send("close").unwrap();
+        fake_server.close();
     }
 }
