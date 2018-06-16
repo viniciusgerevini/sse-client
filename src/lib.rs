@@ -171,6 +171,7 @@ fn parse_field<'a>(message: &'a String) -> (&'a str, &'a str) {
 mod tests {
     use super::*;
     use std::time::Duration;
+    use std::sync::mpsc;
 
     mod fake_server;
 
@@ -199,30 +200,17 @@ mod tests {
 
     #[test]
     fn accept_closure_as_listeners() {
-        static mut CALL_COUNT: i32 = 0;
-        static mut IS_RIGHT_MESSAGE: bool = false;
-
+        let (tx, rx) = mpsc::channel();
         let (event_source, fake_server) = setup();
 
         event_source.on_message(move |message| {
-            unsafe {
-                CALL_COUNT += 1;
-                IS_RIGHT_MESSAGE = message.data == "some message";
-            }
+            tx.send(message.data).unwrap();
         });
 
         fake_server.send("\ndata: some message\n\n");
 
-        unsafe {
-            let mut retry_count = 0;
-            while CALL_COUNT == 0 && retry_count < 5 {
-              thread::sleep(Duration::from_millis(100));
-              retry_count += 1;
-            }
-
-            assert_eq!(CALL_COUNT, 1);
-            assert!(IS_RIGHT_MESSAGE);
-        }
+        let message = rx.recv().unwrap();
+        assert_eq!(message, "some message");
 
         event_source.close();
         fake_server.close();
@@ -230,30 +218,26 @@ mod tests {
 
     #[test]
     fn should_trigger_listeners_when_message_received() {
-        static mut CALL_COUNT: i32 = 0;
-        static mut IS_RIGHT_MESSAGE: bool = false;
-
+        let (tx, rx) = mpsc::channel();
+        let tx2 = tx.clone();
         let (event_source, fake_server) = setup();
 
-        event_source.on_message(|message| {
-            unsafe {
-                CALL_COUNT += 1;
-                IS_RIGHT_MESSAGE = message.data == "some message";
-            }
+        event_source.on_message(move |message| {
+            tx.send(message.data).unwrap();
+        });
+
+
+        event_source.on_message(move |message| {
+            tx2.send(message.data).unwrap();
         });
 
         fake_server.send("\ndata: some message\n\n");
 
-        unsafe {
-            let mut retry_count = 0;
-            while CALL_COUNT == 0 && retry_count < 5 {
-              thread::sleep(Duration::from_millis(100));
-              retry_count += 1;
-            }
+        let message = rx.recv().unwrap();
+        let message2 = rx.recv().unwrap();
 
-            assert_eq!(CALL_COUNT, 1);
-            assert!(IS_RIGHT_MESSAGE);
-        }
+        assert_eq!(message, "some message");
+        assert_eq!(message2, "some message");
 
         event_source.close();
         fake_server.close();
@@ -261,14 +245,12 @@ mod tests {
 
     #[test]
     fn should_not_trigger_listeners_for_comments() {
-        static mut CALL_COUNT: i32 = 0;
+        let (tx, rx) = mpsc::channel();
 
         let (event_source, fake_server) = setup();
 
-        event_source.on_message(|_| {
-            unsafe {
-                CALL_COUNT += 1;
-            }
+        event_source.on_message(move |message| {
+            tx.send(message.data).unwrap();
         });
 
         fake_server.send("\n");
@@ -277,10 +259,11 @@ mod tests {
         fake_server.send(":this is another comment\n");
         fake_server.send("data: this is a message\n\n");
 
-        unsafe {
-            thread::sleep(Duration::from_millis(500));
-            assert_eq!(CALL_COUNT, 2);
-        }
+        let message = rx.recv().unwrap();
+        let message2 = rx.recv().unwrap();
+
+        assert_eq!(message, "message");
+        assert_eq!(message2, "this is a message");
 
         event_source.close();
         fake_server.close();
@@ -288,14 +271,12 @@ mod tests {
 
     #[test]
     fn ensure_stream_is_parsed_after_headers() {
-        static mut CALL_COUNT: i32 = 0;
+        let (tx, rx) = mpsc::channel();
 
         let (event_source, fake_server) = setup();
 
-        event_source.on_message(|_| {
-            unsafe {
-                CALL_COUNT += 1;
-            }
+        event_source.on_message(move |message| {
+            tx.send(message.data).unwrap();
         });
 
         fake_server.send("HTTP/1.1 200 OK\n");
@@ -306,10 +287,9 @@ mod tests {
         fake_server.send("\n");
         fake_server.send("data: this is a message\n\n");
 
-        unsafe {
-            thread::sleep(Duration::from_millis(300));
-            assert_eq!(CALL_COUNT, 1);
-        }
+        let message = rx.recv().unwrap();
+
+        assert_eq!(message, "this is a message");
 
         event_source.close();
         fake_server.close();
@@ -317,14 +297,12 @@ mod tests {
 
     #[test]
     fn ignore_empty_messages() {
-        static mut CALL_COUNT: i32 = 0;
+        let (tx, rx) = mpsc::channel();
 
         let (event_source, fake_server) = setup();
 
-        event_source.on_message(|_| {
-            unsafe {
-                CALL_COUNT += 1;
-            }
+        event_source.on_message(move |message| {
+            tx.send(message.data).unwrap();
         });
 
         fake_server.send("\n");
@@ -333,10 +311,11 @@ mod tests {
         fake_server.send("\n");
         fake_server.send("data: this is a message\n\n");
 
-        unsafe {
-            thread::sleep(Duration::from_millis(500));
-            assert_eq!(CALL_COUNT, 2);
-        }
+        let message = rx.recv().unwrap();
+        let message2 = rx.recv().unwrap();
+
+        assert_eq!(message, "message");
+        assert_eq!(message2, "this is a message");
 
         event_source.close();
         fake_server.close();
@@ -344,25 +323,22 @@ mod tests {
 
     #[test]
     fn event_trigger_its_defined_listener() {
-        static mut IS_RIGHT_EVENT: bool = false;
+        let (tx, rx) = mpsc::channel();
 
         let (event_source, fake_server) = setup();
 
-        event_source.add_event_listener("myEvent", |event| {
-            unsafe {
-                IS_RIGHT_EVENT = event.type_ == String::from("myEvent");
-                IS_RIGHT_EVENT = IS_RIGHT_EVENT && event.data == String::from("my message");
-            }
+        event_source.add_event_listener("myEvent", move |event| {
+            tx.send(event).unwrap();
         });
 
         fake_server.send("\n");
         fake_server.send("event: myEvent\n");
         fake_server.send("data: my message\n\n");
 
-        unsafe {
-            thread::sleep(Duration::from_millis(500));
-            assert!(IS_RIGHT_EVENT);
-        }
+        let message = rx.recv().unwrap();
+
+        assert_eq!(message.type_, String::from("myEvent"));
+        assert_eq!(message.data, String::from("my message"));
 
         event_source.close();
         fake_server.close();
@@ -370,24 +346,19 @@ mod tests {
 
     #[test]
     fn dont_trigger_on_message_for_event() {
-        static mut ON_MESSAGE_WAS_CALLED: bool = false;
-
+        let (tx, rx) = mpsc::channel();
         let (event_source, fake_server) = setup();
 
-        event_source.on_message(|_| {
-            unsafe {
-                ON_MESSAGE_WAS_CALLED = true;
-            }
+        event_source.on_message(move |_| {
+            tx.send("NOOOOOOOOOOOOOOOOOOO!").unwrap();
         });
 
         fake_server.send("\n");
         fake_server.send("event: myEvent\n");
         fake_server.send("data: my message\n\n");
 
-        unsafe {
-            thread::sleep(Duration::from_millis(500));
-            assert!(!ON_MESSAGE_WAS_CALLED);
-        }
+        thread::sleep(Duration::from_millis(500));
+        assert!(rx.try_recv().is_err());
 
         event_source.close();
         fake_server.close();
@@ -395,52 +366,40 @@ mod tests {
 
     #[test]
     fn should_close_connection() {
-        static mut CALL_COUNT: i32 = 0;
+        let (tx, rx) = mpsc::channel();
 
         let (event_source, fake_server) = setup();
 
-        event_source.on_message(|_| {
-            unsafe {
-                CALL_COUNT += 1;
-            }
+         event_source.on_message(move |message| {
+            tx.send(message.data).unwrap();
         });
 
         fake_server.send("\ndata: some message\n\n");
-        thread::sleep(Duration::from_millis(200));
+        rx.recv().unwrap();
         event_source.close();
         fake_server.send("\ndata: some message\n\n");
 
-        unsafe {
-            thread::sleep(Duration::from_millis(400));
-
-            assert_eq!(CALL_COUNT, 1);
-        }
+        thread::sleep(Duration::from_millis(400));
+        assert!(rx.try_recv().is_err());
 
         fake_server.close();
     }
 
     #[test]
     fn should_trigger_on_open_callback_when_connected() {
-        static mut CONNECTION_OPEN: bool = false;
-        static mut OPEN_CALLBACK_CALLS: i32 = 0;
-
+        let (tx, rx) = mpsc::channel();
         let (event_source, fake_server) = setup();
 
-        event_source.on_open(|| {
-            unsafe {
-                CONNECTION_OPEN = true;
-                OPEN_CALLBACK_CALLS += 1;
-            }
+        event_source.on_open(move || {
+            tx.send("open").unwrap();
         });
 
         fake_server.send("HTTP/1.1 200 OK\n");
         fake_server.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
         fake_server.send("\n");
-        unsafe {
-            thread::sleep(Duration::from_millis(200));
-            assert!(CONNECTION_OPEN);
-            assert_eq!(OPEN_CALLBACK_CALLS, 1);
-        }
+
+        rx.recv().unwrap();
+
         event_source.close();
         fake_server.close();
     }
