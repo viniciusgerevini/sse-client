@@ -13,7 +13,7 @@ mod network;
 
 
 pub struct EventSource {
-    pub ready_state: Arc<Mutex<State>>,
+    ready_state: Arc<Mutex<State>>,
     listeners: Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>,
     on_open_listeners: Arc<Mutex<Vec<Box<Fn() + Send>>>>,
     stream: TcpStream
@@ -25,7 +25,7 @@ pub struct Event {
     data: String
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum State {
     CONNECTING,
     OPEN,
@@ -74,6 +74,11 @@ impl EventSource {
         } else {
             listeners.insert(String::from(event_type), vec!(listener));
         }
+    }
+
+    pub fn state(&self) -> State {
+        let state = &self.ready_state.lock().unwrap();
+        (*state).clone()
     }
 }
 
@@ -454,10 +459,8 @@ mod tests {
     fn should_have_status_connecting_while_opening_connection() {
         let (event_source, fake_server) = setup();
 
-        {
-            let state = event_source.ready_state.lock().unwrap();
-            assert_eq!(*state, State::CONNECTING);
-        }
+        let state = event_source.state();
+        assert_eq!(state, State::CONNECTING);
 
         event_source.close();
         fake_server.close();
@@ -470,10 +473,8 @@ mod tests {
         fake_server.send("\n");
         thread::sleep(Duration::from_millis(200));
 
-        {
-            let state = event_source.ready_state.lock().unwrap();
-            assert_eq!(*state, State::OPEN);
-        }
+        let state = event_source.state();
+        assert_eq!(state, State::OPEN);
 
         event_source.close();
         fake_server.close();
@@ -485,10 +486,10 @@ mod tests {
 
         event_source.close();
         thread::sleep(Duration::from_millis(200));
-        {
-            let state = event_source.ready_state.lock().unwrap();
-            assert_eq!(*state, State::CLOSED);
-        }
+
+        let state = event_source.state();
+        assert_eq!(state, State::CLOSED);
+
         fake_server.close();
     }
 }
