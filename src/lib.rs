@@ -167,68 +167,11 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    use std::net::TcpListener;
-    use std::thread;
-    use std::sync::mpsc;
+    mod fake_server;
 
-    static mut SERVER_PORT: i32 = 6666;
-
-    struct FakeServer {
-        address: String,
-        client_tx: std::sync::mpsc::Sender<&'static str>
-    }
-
-    impl FakeServer {
-        pub fn new(address: String) -> FakeServer {
-            let (client_tx, server_rx) = mpsc::channel();
-            let (server_tx, client_rx) = mpsc::channel();
-
-            let socket_address = address.clone();
-
-            thread::spawn(move || {
-                let listener = TcpListener::bind(socket_address).unwrap();
-                server_tx.send("server_ready").unwrap();
-                for stream in listener.incoming() {
-                    let mut stream = stream.unwrap();
-
-                    for received in server_rx {
-                        match received {
-                            "close" => break,
-                            _ => {
-                                stream.write(received.as_bytes()).unwrap();
-                            }
-                        }
-                    }
-                    break;
-                }
-            });
-
-            client_rx.recv().unwrap();
-
-            FakeServer {
-                address,
-                client_tx
-            }
-        }
-
-        pub fn send(&self, message: &'static str) {
-            &self.client_tx.send(message).unwrap();
-        }
-
-        pub fn close(&self) {
-            &self.client_tx.send("close").unwrap();
-        }
-    }
-
-    fn setup() -> (EventSource, FakeServer) {
-        let port;
-        unsafe {
-            SERVER_PORT += 1;
-            port = SERVER_PORT;
-        }
-
-        let fake_server = FakeServer::new(format!("127.0.0.1:{}", port));
-        let address = format!("http://{}/sub", fake_server.address);
+    fn setup() -> (EventSource, fake_server::FakeServer) {
+        let fake_server = fake_server::FakeServer::new();
+        let address = format!("http://{}/sub", fake_server.socket_address());
         let event_source = EventSource::new(address.as_str()).unwrap();
 
         (event_source, fake_server)
