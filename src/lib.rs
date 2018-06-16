@@ -198,40 +198,30 @@ mod tests {
     }
 
     #[test]
-    fn should_register_listeners() {
-        let (event_source, fake_server) = setup();
-
-        event_source.on_message(|_| {});
-        event_source.on_message(|_| {});
-
-        let listeners = event_source.listeners.lock().unwrap();
-
-        if let Some(l) = listeners.get("message") {
-            assert_eq!(l.len(), 2)
-        } else {
-            panic!("should contain listeners")
-        }
-
-        event_source.close();
-        fake_server.close();
-    }
-
-    #[test]
     fn accept_closure_as_listeners() {
+        static mut CALL_COUNT: i32 = 0;
+        static mut IS_RIGHT_MESSAGE: bool = false;
+
         let (event_source, fake_server) = setup();
 
-        let something = "s";
-
-        event_source.on_message(move |_| {
-            println!("{}", something);
+        event_source.on_message(move |message| {
+            unsafe {
+                CALL_COUNT += 1;
+                IS_RIGHT_MESSAGE = message.data == "some message";
+            }
         });
 
-        let listeners = event_source.listeners.lock().unwrap();
+        fake_server.send("\ndata: some message\n\n");
 
-        if let Some(l) = listeners.get("message") {
-            assert_eq!(l.len(), 1)
-        } else {
-            panic!("should contain listeners")
+        unsafe {
+            let mut retry_count = 0;
+            while CALL_COUNT == 0 && retry_count < 5 {
+              thread::sleep(Duration::from_millis(100));
+              retry_count += 1;
+            }
+
+            assert_eq!(CALL_COUNT, 1);
+            assert!(IS_RIGHT_MESSAGE);
         }
 
         event_source.close();
