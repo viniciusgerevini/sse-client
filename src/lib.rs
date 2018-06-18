@@ -11,6 +11,8 @@ use std::net::{Shutdown, TcpStream};
 
 mod network;
 
+#[cfg(test)]
+mod test_helper;
 
 pub struct EventSource {
     ready_state: Arc<Mutex<State>>,
@@ -173,7 +175,7 @@ mod tests {
     use std::time::Duration;
     use std::sync::mpsc;
 
-    mod fake_server;
+    use test_helper::fake_server;
 
     fn setup() -> (EventSource, fake_server::FakeServer) {
         let fake_server = fake_server::FakeServer::new();
