@@ -1,24 +1,20 @@
 extern crate url;
 
-use std::io::prelude::*;
-use std::io::BufReader;
-use std::thread;
+mod network;
+#[cfg(test)]
+mod test_helper;
+
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::collections::HashMap;
 use url::{Url, ParseError};
-use std::net::{Shutdown, TcpStream};
-
-mod network;
-
-#[cfg(test)]
-mod test_helper;
+use network::EventStream;
+use network::State;
 
 pub struct EventSource {
-    ready_state: Arc<Mutex<State>>,
     listeners: Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>,
     on_open_listeners: Arc<Mutex<Vec<Box<Fn() + Send>>>>,
-    stream: TcpStream
+    stream: EventStream
 }
 
 #[derive(Debug, Clone)]
@@ -27,35 +23,29 @@ pub struct Event {
     data: String
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum State {
-    CONNECTING,
-    OPEN,
-    CLOSED
-}
-
 impl EventSource {
     pub fn new(url: &str) -> Result<EventSource, ParseError> {
-        let stream = network::open_connection(Url::parse(url)?).unwrap();
-
+        let mut stream = EventStream::new(Url::parse(url)?).unwrap();
         let listeners = Arc::new(Mutex::new(HashMap::new()));
         let on_open_listeners = Arc::new(Mutex::new(vec!()));
-        let ready_state = Arc::new(Mutex::new(State::CONNECTING));
 
-        listen_to_stream(
-            stream.try_clone().unwrap(),
-            Arc::clone(&ready_state),
-            Arc::clone(&listeners),
-            Arc::clone(&on_open_listeners)
-        );
+        let open_listeners = Arc::clone(&on_open_listeners);
+        stream.on_open(move || {
+            dispatch_open_event(&open_listeners);
+        });
 
-        Ok(EventSource{ ready_state, listeners, stream: stream, on_open_listeners })
+        let pending_event = Arc::new(Mutex::new(None));
+        let message_listeners = Arc::clone(&listeners);
+        stream.on_message(move |message| {
+            let mut pending_event = pending_event.lock().unwrap();
+            handle_message(message, &mut pending_event, &message_listeners);
+        });
+
+        Ok(EventSource{ listeners, stream, on_open_listeners })
     }
 
     pub fn close(&self) {
-        self.stream.shutdown(Shutdown::Both).unwrap();
-        let mut state = self.ready_state.lock().unwrap();
-        *state = State::CLOSED;
+        self.stream.close();
     }
 
     pub fn on_open<F>(&self, listener: F) where F: Fn() + Send + 'static {
@@ -79,61 +69,26 @@ impl EventSource {
     }
 
     pub fn state(&self) -> State {
-        let state = &self.ready_state.lock().unwrap();
-        (*state).clone()
+        self.stream.state()
     }
 }
 
-fn listen_to_stream(
-    stream: TcpStream,
-    state: Arc<Mutex<State>>,
-    listeners: Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>,
-    on_open_listeners: Arc<Mutex<Vec<Box<Fn() + Send>>>>
-) {
-    thread::spawn(move || {
-        let reader = BufReader::new(stream.try_clone().unwrap());
-        let mut pending_event: Option<Event> = None;
-
-        for line in reader.lines() {
-            let line = line.unwrap();
-            let mut state = state.lock().unwrap();
-
-            match *state {
-                State::CONNECTING => *state = handle_stream_header(line, &on_open_listeners),
-                _ => pending_event = handle_stream_body(pending_event, line, &listeners)
-            }
-        }
-    });
-}
-
-fn handle_stream_header(line: String, listeners: &Arc<Mutex<Vec<Box<Fn() + Send>>>>) -> State {
-    if line == "" {
-        dispatch_open_event(listeners);
-        State::OPEN
-    } else {
-        State::CONNECTING
+fn handle_message(message: String, pending_event: &mut Option<Event>, listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>) {
+    if message == "" {
+        dispatch_event(listeners, &pending_event);
+        *pending_event = None;
+    } else if !message.starts_with(":") {
+        *pending_event = update_event(&pending_event, message);
     }
 }
 
-fn handle_stream_body(
-    pending_event: Option<Event>,
-    line: String,
-    listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>
-) -> Option<Event> {
-    let mut event = None;
-
-    if line == "" {
-        if let Some(e) = pending_event {
-            dispatch_event(listeners, &e);
-        }
-    } else if !line.starts_with(":") {
-        event = update_event(pending_event, line);
+fn dispatch_event(listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>, event: &Option<Event>) {
+    if let Some(ref e) = *event {
+        trigger_listeners(listeners, e);
     }
-
-    event
 }
 
-fn dispatch_event(listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>, event: &Event) {
+fn trigger_listeners(listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>, event: &Event) {
     let listeners = listeners.lock().unwrap();
     if listeners.contains_key(&event.type_) {
         for listener in listeners.get(&event.type_).unwrap().iter() {
@@ -149,7 +104,7 @@ fn dispatch_open_event(listeners: &Arc<Mutex<Vec<Box<Fn() + Send>>>>) {
     }
 }
 
-fn update_event(pending_event: Option<Event>, message: String) -> Option<Event> {
+fn update_event(pending_event: &Option<Event>, message: String) -> Option<Event> {
     let mut event = match pending_event {
         Some(e) => e.clone(),
         None => Event { type_: String::from("message"), data: String::from("") }
@@ -172,6 +127,7 @@ fn parse_field<'a>(message: &'a String) -> (&'a str, &'a str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
     use std::time::Duration;
     use std::sync::mpsc;
 
@@ -266,32 +222,6 @@ mod tests {
 
         assert_eq!(message, "message");
         assert_eq!(message2, "this is a message");
-
-        event_source.close();
-        fake_server.close();
-    }
-
-    #[test]
-    fn ensure_stream_is_parsed_after_headers() {
-        let (tx, rx) = mpsc::channel();
-
-        let (event_source, fake_server) = setup();
-
-        event_source.on_message(move |message| {
-            tx.send(message.data).unwrap();
-        });
-
-        fake_server.send("HTTP/1.1 200 OK\n");
-        fake_server.send("Server: nginx/1.10.3\n");
-        fake_server.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
-        fake_server.send("Content-Type: text/event-stream; charset=utf-8\n");
-        fake_server.send("Connection: keep-alive\n");
-        fake_server.send("\n");
-        fake_server.send("data: this is a message\n\n");
-
-        let message = rx.recv().unwrap();
-
-        assert_eq!(message, "this is a message");
 
         event_source.close();
         fake_server.close();
@@ -407,39 +337,20 @@ mod tests {
     }
 
     #[test]
-    fn should_have_status_connecting_while_opening_connection() {
+    fn should_return_stream_connection_status() {
         let (event_source, fake_server) = setup();
 
-        let state = event_source.state();
-        assert_eq!(state, State::CONNECTING);
-
-        event_source.close();
-        fake_server.close();
-    }
-
-    #[test]
-    fn should_have_status_open_after_connection_stabilished() {
-        let (event_source, fake_server) = setup();
+        assert_eq!(event_source.state(), State::CONNECTING);
 
         fake_server.send("\n");
         thread::sleep(Duration::from_millis(200));
 
-        let state = event_source.state();
-        assert_eq!(state, State::OPEN);
-
-        event_source.close();
-        fake_server.close();
-    }
-
-    #[test]
-    fn should_have_status_closed_after_closing_connection() {
-        let (event_source, fake_server) = setup();
+        assert_eq!(event_source.state(), State::OPEN);
 
         event_source.close();
         thread::sleep(Duration::from_millis(200));
 
-        let state = event_source.state();
-        assert_eq!(state, State::CLOSED);
+        assert_eq!(event_source.state(), State::CLOSED);
 
         fake_server.close();
     }
