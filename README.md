@@ -5,13 +5,12 @@ Client for event streams
 
 ## Not Implemented
 
-- on error callback
 - Handle HTTP status code properly
-- Redirects
+- on error callback
 - Reconnection
   - Handle 204 to stop reconnections
   - Starting reconnection from last sent event
   - Setting retry time
+- Redirects
 - withCredentials option
-- a better approach for dummy http server
 
