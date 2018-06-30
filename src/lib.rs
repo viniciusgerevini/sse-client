@@ -1,19 +1,19 @@
 extern crate url;
 
 mod network;
+mod pub_sub;
 #[cfg(test)]
 mod test_helper;
 
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::collections::HashMap;
 use url::{Url, ParseError};
 use network::EventStream;
 use network::State;
+use pub_sub::Bus;
 
 pub struct EventSource {
-    listeners: Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>,
-    on_open_listeners: Arc<Mutex<Vec<Box<Fn() + Send>>>>,
+    bus: Arc<Mutex<Bus<Event>>>,
     stream: EventStream
 }
 
@@ -26,22 +26,23 @@ pub struct Event {
 impl EventSource {
     pub fn new(url: &str) -> Result<EventSource, ParseError> {
         let mut stream = EventStream::new(Url::parse(url)?).unwrap();
-        let listeners = Arc::new(Mutex::new(HashMap::new()));
-        let on_open_listeners = Arc::new(Mutex::new(vec!()));
+        let bus = Arc::new(Mutex::new(Bus::new()));
 
-        let open_listeners = Arc::clone(&on_open_listeners);
+        let event_bus = Arc::clone(&bus);
         stream.on_open(move || {
-            dispatch_open_event(&open_listeners);
+            let event_bus = event_bus.lock().unwrap();
+            let event = Event { type_: String::from("stream_open"), data: String::from("") };
+            event_bus.publish(event.type_.clone(), event.clone());
         });
 
         let pending_event = Arc::new(Mutex::new(None));
-        let message_listeners = Arc::clone(&listeners);
+        let event_bus = Arc::clone(&bus);
         stream.on_message(move |message| {
             let mut pending_event = pending_event.lock().unwrap();
-            handle_message(message, &mut pending_event, &message_listeners);
+            handle_message(message, &mut pending_event, &event_bus);
         });
 
-        Ok(EventSource{ listeners, stream, on_open_listeners })
+        Ok(EventSource{ stream, bus })
     }
 
     pub fn close(&self) {
@@ -49,8 +50,7 @@ impl EventSource {
     }
 
     pub fn on_open<F>(&self, listener: F) where F: Fn() + Send + 'static {
-        let mut listeners = self.on_open_listeners.lock().unwrap();
-        listeners.push(Box::new(listener));
+        self.add_event_listener("stream_open", move |_| { listener(); });
     }
 
     pub fn on_message<F>(&self, listener: F) where F: Fn(Event) + Send + 'static {
@@ -58,14 +58,8 @@ impl EventSource {
     }
 
     pub fn add_event_listener<F>(&self, event_type: &str, listener: F) where F: Fn(Event) + Send + 'static {
-        let mut listeners = self.listeners.lock().unwrap();
-        let listener = Box::new(listener);
-
-        if listeners.contains_key(event_type) {
-            listeners.get_mut(event_type).unwrap().push(listener);
-        } else {
-            listeners.insert(String::from(event_type), vec!(listener));
-        }
+        let mut bus = self.bus.lock().unwrap();
+        bus.subscribe(event_type.to_string(), listener);
     }
 
     pub fn state(&self) -> State {
@@ -73,34 +67,15 @@ impl EventSource {
     }
 }
 
-fn handle_message(message: String, pending_event: &mut Option<Event>, listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>) {
+fn handle_message(message: String, pending_event: &mut Option<Event>, event_bus: &Arc<Mutex<Bus<Event>>>) {
     if message == "" {
-        dispatch_event(listeners, &pending_event);
+        if let Some(ref e) = *pending_event {
+            let event_bus = event_bus.lock().unwrap();
+            event_bus.publish(e.type_.clone(), e.clone());
+        }
         *pending_event = None;
     } else if !message.starts_with(":") {
         *pending_event = update_event(&pending_event, message);
-    }
-}
-
-fn dispatch_event(listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>, event: &Option<Event>) {
-    if let Some(ref e) = *event {
-        trigger_listeners(listeners, e);
-    }
-}
-
-fn trigger_listeners(listeners: &Arc<Mutex<HashMap<String, Vec<Box<Fn(Event) + Send>>>>>, event: &Event) {
-    let listeners = listeners.lock().unwrap();
-    if listeners.contains_key(&event.type_) {
-        for listener in listeners.get(&event.type_).unwrap().iter() {
-            listener(event.clone())
-        }
-    }
-}
-
-fn dispatch_open_event(listeners: &Arc<Mutex<Vec<Box<Fn() + Send>>>>) {
-    let listeners = listeners.lock().unwrap();
-    for listener in listeners.iter() {
-        listener()
     }
 }
 
@@ -183,7 +158,6 @@ mod tests {
         event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
         });
-
 
         event_source.on_message(move |message| {
             tx2.send(message.data).unwrap();
