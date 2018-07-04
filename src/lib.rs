@@ -26,9 +26,7 @@ impl EventSource {
 
         let event_bus = Arc::clone(&bus);
         stream.on_open(move || {
-            let event_bus = event_bus.lock().unwrap();
-            let event = Event::new("stream_open", "");
-            event_bus.publish(event.type_.clone(), event.clone());
+            publish_initial_stream_event(&event_bus);
         });
 
         let event_builder = Arc::new(Mutex::new(EventBuilder::new()));
@@ -45,7 +43,7 @@ impl EventSource {
     }
 
     pub fn on_open<F>(&self, listener: F) where F: Fn() + Send + 'static {
-        self.add_event_listener("stream_open", move |_| { listener(); });
+        self.add_event_listener("stream_opened", move |_| { listener(); });
     }
 
     pub fn on_message<F>(&self, listener: F) where F: Fn(Event) + Send + 'static {
@@ -60,6 +58,12 @@ impl EventSource {
     pub fn state(&self) -> State {
         self.stream.state()
     }
+}
+
+fn publish_initial_stream_event(event_bus: &Arc<Mutex<Bus<Event>>>) {
+    let event_bus = event_bus.lock().unwrap();
+    let event = Event::new("stream_opened", "");
+    event_bus.publish(event.type_.clone(), event);
 }
 
 fn handle_message(message: &str, event_builder: &Arc<Mutex<EventBuilder>>, event_bus: &Arc<Mutex<Bus<Event>>>) {
