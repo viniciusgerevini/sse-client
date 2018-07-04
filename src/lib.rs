@@ -67,7 +67,7 @@ fn handle_message(message: &str, event_builder: &Arc<Mutex<EventBuilder>>, event
     event_builder.update(&message);
 
     if event_builder.state() == EventBuilderState::COMPLETE {
-        if let Some(event) = event_builder.build() {
+        if let Some(event) = event_builder.get_event() {
             let event_bus = event_bus.lock().unwrap();
             event_bus.publish(event.type_.clone(), event.clone());
         }

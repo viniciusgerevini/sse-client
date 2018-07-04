@@ -59,7 +59,7 @@ impl EventBuilder {
         Some(pending_event)
     }
 
-    pub fn build(&self) -> Option<Event> {
+    pub fn get_event(&self) -> Option<Event> {
        self.pending_event.clone()
     }
 
@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn should_start_with_empty_state() {
         let e = EventBuilder::new();
-        let event = e.build();
+        let event = e.get_event();
 
         assert_eq!(e.state(), EventBuilderState::EMPTY);
         assert_eq!(event, None);
@@ -91,7 +91,7 @@ mod tests {
         let mut e = EventBuilder::new();
         e.update("data: test");
 
-        let event = e.build().unwrap();
+        let event = e.get_event().unwrap();
 
         assert_eq!(e.state(), EventBuilderState::PENDING);
         assert_eq!(event.type_, String::from("message"));
@@ -103,7 +103,7 @@ mod tests {
         e.update("data: test");
         e.update("");
 
-        e.build().unwrap();
+        e.get_event().unwrap();
 
         assert_eq!(e.state(), EventBuilderState::COMPLETE);
     }
@@ -113,7 +113,7 @@ mod tests {
         let mut e = EventBuilder::new();
         e.update("");
 
-        let event = e.build();
+        let event = e.get_event();
 
         assert_eq!(e.state(), EventBuilderState::EMPTY);
         assert_eq!(event, None);
@@ -124,7 +124,7 @@ mod tests {
         let mut e = EventBuilder::new();
         e.update("data: test");
 
-        let event = e.build().unwrap();
+        let event = e.get_event().unwrap();
 
         assert_eq!(event.data, String::from("test"));
     }
@@ -134,7 +134,7 @@ mod tests {
         let mut e = EventBuilder::new();
         e.update("event: some_event");
 
-        let event = e.build().unwrap();
+        let event = e.get_event().unwrap();
 
         assert_eq!(event.type_, String::from("some_event"));
     }
@@ -149,7 +149,7 @@ mod tests {
         e.update("event: some_event");
         e.update("data: test");
 
-        let event = e.build().unwrap();
+        let event = e.get_event().unwrap();
 
         assert_eq!(event, expected_event);
     }
@@ -161,7 +161,7 @@ mod tests {
         e.update("");
         e.update("");
 
-        let event = e.build();
+        let event = e.get_event();
 
         assert_eq!(e.state(), EventBuilderState::EMPTY);
         assert_eq!(event, None);
@@ -179,7 +179,7 @@ mod tests {
         e.update("");
         e.update("data: test2");
 
-        let event = e.build().unwrap();
+        let event = e.get_event().unwrap();
 
         assert_eq!(e.state(), EventBuilderState::PENDING);
         assert_eq!(event, expected_event);
@@ -196,7 +196,7 @@ mod tests {
         e.update(":some commentary");
         e.update("data: test");
 
-        let event = e.build().unwrap();
+        let event = e.get_event().unwrap();
 
         assert_eq!(event, expected_event);
     }
