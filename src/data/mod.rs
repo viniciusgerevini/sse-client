@@ -1,6 +1,5 @@
 pub struct EventBuilder {
-    pending_event: Option<Event>,
-    event_state: EventBuilderState
+    pending_event: EventBuilderState
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -11,9 +10,9 @@ pub struct Event {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum EventBuilderState {
-    EMPTY,
-    PENDING,
-    COMPLETE
+    Empty,
+    Pending(Event),
+    Complete(Event)
 }
 
 impl Event {
@@ -24,7 +23,7 @@ impl Event {
 
 impl EventBuilder {
     pub fn new() -> EventBuilder {
-        EventBuilder { pending_event: None, event_state: EventBuilderState::EMPTY }
+        EventBuilder { pending_event: EventBuilderState::Empty }
     }
 
     pub fn update(&mut self, message: &str) {
@@ -36,24 +35,17 @@ impl EventBuilder {
     }
 
     fn finalize_event(&mut self) {
-        match self.event_state {
-            EventBuilderState::COMPLETE => {
-                self.event_state = EventBuilderState::EMPTY;
-                self.pending_event = None;
-            },
-            EventBuilderState::PENDING =>
-                self.event_state = EventBuilderState::COMPLETE,
-            _ => {}
-        }
+        self.pending_event = match self.pending_event {
+            EventBuilderState::Complete(_) => EventBuilderState::Empty,
+            EventBuilderState::Pending(ref event) => EventBuilderState::Complete(event.clone()),
+            ref e => e.clone()
+        };
     }
 
-    fn update_event(&mut self, message: &str) -> Option<Event> {
-        let mut pending_event = match &self.event_state {
-            EventBuilderState::PENDING => self.pending_event.clone().unwrap(),
-            _ => {
-                self.event_state = EventBuilderState::PENDING;
-                Event::new("message", "")
-            }
+    fn update_event(&mut self, message: &str) -> EventBuilderState {
+        let mut pending_event = match &self.pending_event {
+            EventBuilderState::Pending(ref e) => e.clone(),
+            _ => Event::new("message", "")
         };
 
         match parse_field(message) {
@@ -62,15 +54,11 @@ impl EventBuilder {
             _ => {}
         }
 
-        Some(pending_event)
+        EventBuilderState::Pending(pending_event)
     }
 
-    pub fn get_event(&self) -> Option<Event> {
+    pub fn get_event(&self) -> EventBuilderState {
        self.pending_event.clone()
-    }
-
-    pub fn state(&self) -> EventBuilderState {
-       self.event_state.clone()
     }
 }
 
@@ -86,10 +74,8 @@ mod tests {
     #[test]
     fn should_start_with_empty_state() {
         let e = EventBuilder::new();
-        let event = e.get_event();
 
-        assert_eq!(e.state(), EventBuilderState::EMPTY);
-        assert_eq!(event, None);
+        assert_eq!(e.get_event(), EventBuilderState::Empty);
     }
 
     #[test]
@@ -97,10 +83,11 @@ mod tests {
         let mut e = EventBuilder::new();
         e.update("data: test");
 
-        let event = e.get_event().unwrap();
-
-        assert_eq!(e.state(), EventBuilderState::PENDING);
-        assert_eq!(event.type_, String::from("message"));
+        if let EventBuilderState::Pending(event) = e.get_event() {
+            assert_eq!(event.type_, String::from("message"));
+        } else {
+            panic!("event should be pending");
+        }
     }
 
     #[test]
@@ -109,9 +96,11 @@ mod tests {
         e.update("data: test");
         e.update("");
 
-        e.get_event().unwrap();
-
-        assert_eq!(e.state(), EventBuilderState::COMPLETE);
+        if let EventBuilderState::Complete(event) = e.get_event() {
+            assert_eq!(event.data, String::from("test"));
+        } else {
+            panic!("event should be complete");
+        }
     }
 
     #[test]
@@ -119,10 +108,7 @@ mod tests {
         let mut e = EventBuilder::new();
         e.update("");
 
-        let event = e.get_event();
-
-        assert_eq!(e.state(), EventBuilderState::EMPTY);
-        assert_eq!(event, None);
+        assert_eq!(e.get_event(), EventBuilderState::Empty);
     }
 
     #[test]
@@ -130,9 +116,11 @@ mod tests {
         let mut e = EventBuilder::new();
         e.update("data: test");
 
-        let event = e.get_event().unwrap();
-
-        assert_eq!(event.data, String::from("test"));
+        if let EventBuilderState::Pending(event) = e.get_event() {
+            assert_eq!(event.data, String::from("test"));
+        } else {
+            panic!("event should be pending");
+        }
     }
 
     #[test]
@@ -140,9 +128,11 @@ mod tests {
         let mut e = EventBuilder::new();
         e.update("event: some_event");
 
-        let event = e.get_event().unwrap();
-
-        assert_eq!(event.type_, String::from("some_event"));
+        if let EventBuilderState::Pending(event) = e.get_event() {
+            assert_eq!(event.type_, String::from("some_event"));
+        } else {
+            panic!("event should be pending");
+        }
     }
 
     #[test]
@@ -152,9 +142,11 @@ mod tests {
         e.update("event: some_event");
         e.update("data: test");
 
-        let event = e.get_event().unwrap();
-
-        assert_eq!(event, expected_event);
+        if let EventBuilderState::Pending(event) = e.get_event() {
+            assert_eq!(event, expected_event);
+        } else {
+            panic!("event should be pending");
+        }
     }
 
     #[test]
@@ -165,10 +157,7 @@ mod tests {
         e.update("");
         e.update("");
 
-        let event = e.get_event();
-
-        assert_eq!(e.state(), EventBuilderState::EMPTY);
-        assert_eq!(event, None);
+        assert_eq!(e.get_event(), EventBuilderState::Empty);
     }
 
     #[test]
@@ -181,10 +170,11 @@ mod tests {
         e.update("");
         e.update("data: test2");
 
-        let event = e.get_event().unwrap();
-
-        assert_eq!(e.state(), EventBuilderState::PENDING);
-        assert_eq!(event, expected_event);
+        if let EventBuilderState::Pending(event) = e.get_event() {
+            assert_eq!(event, expected_event);
+        } else {
+            panic!("event should be pending");
+        }
     }
 
     #[test]
@@ -196,8 +186,10 @@ mod tests {
         e.update(":some commentary");
         e.update("data: test");
 
-        let event = e.get_event().unwrap();
-
-        assert_eq!(event, expected_event);
+        if let EventBuilderState::Pending(event) = e.get_event() {
+            assert_eq!(event, expected_event);
+        } else {
+            panic!("event should be pending");
+        }
     }
 }
