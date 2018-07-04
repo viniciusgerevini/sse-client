@@ -26,12 +26,14 @@ impl EventBuilder {
         EventBuilder { pending_event: EventBuilderState::Empty }
     }
 
-    pub fn update(&mut self, message: &str) {
+    pub fn update(&mut self, message: &str) -> EventBuilderState {
         if message == "" {
             self.finalize_event();
         } else {
             self.pending_event = self.update_event(message);
         }
+
+        self.get_event()
     }
 
     fn finalize_event(&mut self) {
@@ -191,5 +193,12 @@ mod tests {
         } else {
             panic!("event should be pending");
         }
+    }
+
+    #[test]
+    fn should_return_event_on_update() {
+        let mut e = EventBuilder::new();
+        assert_eq!(e.update("event: some_event"), e.get_event());
+        assert_eq!(e.update("data: test"), e.get_event());
     }
 }
