@@ -31,11 +31,10 @@ impl EventSource {
             event_bus.publish(event.type_.clone(), event.clone());
         });
 
-        let pending_event = Arc::new(Mutex::new(None));
+        let event_builder = Arc::new(Mutex::new(EventBuilder::new()));
         let event_bus = Arc::clone(&bus);
         stream.on_message(move |message| {
-            let mut pending_event = pending_event.lock().unwrap();
-            handle_message(message, &mut pending_event, &event_bus);
+            handle_message(&message, &event_builder, &event_bus);
         });
 
         Ok(EventSource{ stream, bus })
@@ -63,36 +62,16 @@ impl EventSource {
     }
 }
 
-fn handle_message(message: String, pending_event: &mut Option<Event>, event_bus: &Arc<Mutex<Bus<Event>>>) {
-    if message == "" {
-        if let Some(ref e) = *pending_event {
+fn handle_message(message: &str, event_builder: &Arc<Mutex<EventBuilder>>, event_bus: &Arc<Mutex<Bus<Event>>>) {
+    let mut event_builder = event_builder.lock().unwrap();
+    event_builder.update(&message);
+
+    if event_builder.state() == EventBuilderState::COMPLETE {
+        if let Some(event) = event_builder.build() {
             let event_bus = event_bus.lock().unwrap();
-            event_bus.publish(e.type_.clone(), e.clone());
+            event_bus.publish(event.type_.clone(), event.clone());
         }
-        *pending_event = None;
-    } else if !message.starts_with(":") {
-        *pending_event = update_event(&pending_event, message);
     }
-}
-
-fn update_event(pending_event: &Option<Event>, message: String) -> Option<Event> {
-    let mut event = match pending_event {
-        Some(e) => e.clone(),
-        None => Event { type_: String::from("message"), data: String::from("") }
-    };
-
-    match parse_field(&message) {
-        ("event", value) => event.type_ = String::from(value),
-        ("data", value) => event.data = String::from(value),
-        _ => ()
-    }
-
-    Some(event)
-}
-
-fn parse_field<'a>(message: &'a String) -> (&'a str, &'a str) {
-    let parts: Vec<&str> = message.split(":").collect();
-    (parts[0], parts[1].trim())
 }
 
 #[cfg(test)]
