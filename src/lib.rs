@@ -27,7 +27,7 @@ impl EventSource {
         let event_bus = Arc::clone(&bus);
         stream.on_open(move || {
             let event_bus = event_bus.lock().unwrap();
-            let event = Event { type_: String::from("stream_open"), data: String::from("") };
+            let event = Event::new("stream_open", "");
             event_bus.publish(event.type_.clone(), event.clone());
         });
 

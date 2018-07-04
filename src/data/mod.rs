@@ -16,6 +16,12 @@ pub enum EventBuilderState {
     COMPLETE
 }
 
+impl Event {
+    pub fn new(type_: &str, data: &str) -> Event {
+        Event { type_: String::from(type_), data: String::from(data) }
+    }
+}
+
 impl EventBuilder {
     pub fn new() -> EventBuilder {
         EventBuilder { pending_event: None, event_state: EventBuilderState::EMPTY }
@@ -46,7 +52,7 @@ impl EventBuilder {
             EventBuilderState::PENDING => self.pending_event.clone().unwrap(),
             _ => {
                 self.event_state = EventBuilderState::PENDING;
-                Event { type_: String::from("message"), data: String::from("") }
+                Event::new("message", "")
             }
         };
 
@@ -141,10 +147,7 @@ mod tests {
 
     #[test]
     fn should_incrementally_fill_event_fields() {
-        let expected_event = Event {
-            type_: String::from("some_event"),
-            data: String::from("test")
-        };
+        let expected_event = Event::new("some_event", "test");
         let mut e = EventBuilder::new();
         e.update("event: some_event");
         e.update("data: test");
@@ -157,6 +160,7 @@ mod tests {
     #[test]
     fn should_change_status_to_empty_when_event_is_complete_and_empty_message_is_received() {
         let mut e = EventBuilder::new();
+
         e.update("data: test");
         e.update("");
         e.update("");
@@ -169,11 +173,9 @@ mod tests {
 
     #[test]
     fn should_start_clean_event_after_previous_is_completed() {
-        let expected_event = Event {
-            type_: String::from("message"),
-            data: String::from("test2")
-        };
+        let expected_event = Event::new("message", "test2");
         let mut e = EventBuilder::new();
+
         e.update("event: some_event");
         e.update("data: test");
         e.update("");
@@ -187,11 +189,9 @@ mod tests {
 
     #[test]
     fn should_ignore_updates_started_with_colon() {
-        let expected_event = Event {
-            type_: String::from("some_event"),
-            data: String::from("test")
-        };
+        let expected_event = Event::new("some_event", "test");
         let mut e = EventBuilder::new();
+
         e.update("event: some_event");
         e.update(":some commentary");
         e.update("data: test");
