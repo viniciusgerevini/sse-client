@@ -2,6 +2,7 @@ extern crate url;
 
 mod network;
 mod pub_sub;
+mod data;
 #[cfg(test)]
 mod test_helper;
 
