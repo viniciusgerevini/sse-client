@@ -5,8 +5,8 @@ pub struct EventBuilder {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Event {
-    type_: String,
-    data: String
+    pub type_: String,
+    pub data: String
 }
 
 #[derive(Debug, PartialEq, Clone)]

@@ -12,16 +12,11 @@ use url::{Url, ParseError};
 use network::EventStream;
 use network::State;
 use pub_sub::Bus;
+use data::*;
 
 pub struct EventSource {
     bus: Arc<Mutex<Bus<Event>>>,
     stream: EventStream
-}
-
-#[derive(Debug, Clone)]
-pub struct Event {
-    type_: String,
-    data: String
 }
 
 impl EventSource {
