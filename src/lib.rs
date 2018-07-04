@@ -6,13 +6,11 @@ mod data;
 #[cfg(test)]
 mod test_helper;
 
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use url::{Url, ParseError};
-use network::EventStream;
-use network::State;
+use network::{EventStream, State};
 use pub_sub::Bus;
-use data::*;
+use data::{EventBuilder, EventBuilderState, Event};
 
 pub struct EventSource {
     bus: Arc<Mutex<Bus<Event>>>,
