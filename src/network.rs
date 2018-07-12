@@ -18,7 +18,8 @@ pub struct EventStream {
     stream: TcpStream,
     state: Arc<Mutex<State>>,
     on_open_listener: Arc<Mutex<Option<Box<Fn() + Send>>>>,
-    on_message_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+    on_message_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
+    on_error_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
 }
 
 impl EventStream {
@@ -31,6 +32,7 @@ impl EventStream {
         let state = Arc::new(Mutex::new(State::CONNECTING));
         let on_open_listener = Arc::new(Mutex::new(None));
         let on_message_listener = Arc::new(Mutex::new(None));
+        let on_error_listener = Arc::new(Mutex::new(None));
 
         let response = format!(
             "GET {} HTTP/1.1\r\nAccept: text/event-stream\r\nHost: {}\r\n\r\n",
@@ -45,7 +47,8 @@ impl EventStream {
             stream,
             state,
             on_open_listener,
-            on_message_listener
+            on_message_listener,
+            on_error_listener
         };
 
         event_stream.listen();
@@ -58,13 +61,26 @@ impl EventStream {
         let state = Arc::clone(&self.state);
         let on_open_listener = Arc::clone(&self.on_open_listener);
         let on_message_listener = Arc::clone(&self.on_message_listener);
+        let on_error_listener = Arc::clone(&self.on_error_listener);
 
         thread::spawn(move || {
             let reader = BufReader::new(stream);
 
             for line in reader.lines() {
-                let line = line.unwrap();
                 let mut state = state.lock().unwrap();
+
+                let line = match line {
+                    Ok(l) => l,
+                    Err(error) => {
+                        let mut on_error_listener = on_error_listener.lock().unwrap();
+                        if let Some(ref f) = *on_error_listener {
+                            f(error.to_string());
+                        }
+                        *state = State::CLOSED;
+                        break
+                    }
+                };
+
 
                 match *state {
                     State::CONNECTING => {
@@ -101,6 +117,11 @@ impl EventStream {
     pub fn on_message<F>(&mut self, listener: F) where F: Fn(String) + Send + 'static {
         let mut on_message_listener = self.on_message_listener.lock().unwrap();
         *on_message_listener = Some(Box::new(listener));
+    }
+
+    pub fn on_error<F>(&mut self, listener: F) where F: Fn(String) + Send + 'static {
+        let mut on_error_listener = self.on_error_listener.lock().unwrap();
+        *on_error_listener = Some(Box::new(listener));
     }
 
     pub fn state(&self) -> State {
@@ -219,6 +240,38 @@ mod tests {
 
         event_stream.close();
         fake_server.close();
+    }
+
+    #[test]
+    fn should_trigger_on_error_when_connection_closed_by_server() {
+        let (tx, rx) = mpsc::channel();
+        let (mut event_stream, fake_server) = setup();
+
+        event_stream.on_error(move |message| {
+            tx.send(message).unwrap();
+        });
+
+        fake_server.close();
+
+        let message = rx.recv().unwrap();
+
+        assert!(message.contains("Connection reset by peer"));
+    }
+
+    #[test]
+    fn should_have_state_closed_when_connection_closed_by_server() {
+        let (tx, rx) = mpsc::channel();
+        let (mut event_stream, fake_server) = setup();
+
+        event_stream.on_error(move |message| {
+            tx.send(message).unwrap();
+        });
+
+        fake_server.close();
+
+        rx.recv().unwrap();
+
+        assert_eq!(event_stream.state(), State::CLOSED);
     }
 }
 

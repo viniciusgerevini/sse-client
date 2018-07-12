@@ -27,6 +27,13 @@ impl EventSource {
             publish_initial_stream_event(&event_bus);
         });
 
+        let event_bus = Arc::clone(&bus);
+        stream.on_error(move |message| {
+            let event_bus = event_bus.lock().unwrap();
+            let event = Event::new("error", &message);
+            event_bus.publish(event.type_.clone(), event);
+        });
+
         let event_builder = Arc::new(Mutex::new(EventBuilder::new()));
         let event_bus = Arc::clone(&bus);
         stream.on_message(move |message| {
@@ -301,5 +308,21 @@ mod tests {
         assert_eq!(event_source.state(), State::CLOSED);
 
         fake_server.close();
+    }
+
+    #[test]
+    fn should_trigger_error_when_connection_closed_by_server() {
+        let (tx, rx) = mpsc::channel();
+
+        let (event_source, fake_server) = setup();
+
+        event_source.add_event_listener("error", move |event| {
+            tx.send(event).unwrap();
+        });
+
+        fake_server.close();
+        let message = rx.recv().unwrap();
+
+        assert_eq!(message.type_, String::from("error"));
     }
 }
