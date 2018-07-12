@@ -17,7 +17,7 @@ pub enum State {
 
 pub struct EventStream {
     url: Arc<Url>,
-    stream: Arc<Mutex<TcpStream>>,
+    stream: Arc<Mutex<Option<TcpStream>>>,
     state: Arc<Mutex<State>>,
     on_open_listener: Arc<Mutex<Option<Box<Fn() + Send>>>>,
     on_message_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
@@ -30,9 +30,7 @@ impl EventStream {
         let on_open_listener = Arc::new(Mutex::new(None));
         let on_message_listener = Arc::new(Mutex::new(None));
         let on_error_listener = Arc::new(Mutex::new(None));
-
-        let stream = connect_event_stream(&url.clone()).unwrap();
-        let stream = Arc::new(Mutex::new(stream));
+        let stream = Arc::new(Mutex::new(None));
 
         let url = Arc::new(url);
 
@@ -61,7 +59,9 @@ impl EventStream {
     }
 
     pub fn close(&self) {
-        self.stream.lock().unwrap().shutdown(Shutdown::Both).unwrap();
+        if let Some(ref st) = *self.stream.lock().unwrap() {
+            st.shutdown(Shutdown::Both).unwrap();
+        }
         let mut state = self.state.lock().unwrap();
         *state = State::CLOSED;
     }
@@ -121,15 +121,22 @@ fn get_host(url: &Url) -> String {
 
 fn process_stream(
     url: Arc<Url>,
-    stream: Arc<Mutex<TcpStream>>,
+    stream: Arc<Mutex<Option<TcpStream>>>,
     state: Arc<Mutex<State>>,
     on_open_listener: Arc<Mutex<Option<Box<Fn() + Send>>>>,
     on_message_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
     on_error_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
 ) {
+    let connection_stream = {
+        let mut stream_lock = stream.lock().unwrap();
+        let s = connect_event_stream(&url).unwrap();
+        *stream_lock = Some(s.try_clone().unwrap());
+        s
+    };
+
     thread::spawn(move || {
         let mut reconnect = false;
-        let reader = BufReader::new(stream.lock().unwrap().try_clone().unwrap());
+        let reader = BufReader::new(connection_stream);
 
         for line in reader.lines() {
             let mut state = state.lock().unwrap();
@@ -180,10 +187,6 @@ fn process_stream(
 
         if reconnect {
             thread::sleep(Duration::from_millis(500));
-
-            let mut stream_lock = stream.lock().unwrap();
-            let reconnection_stream = connect_event_stream(&url).unwrap();
-            *stream_lock = reconnection_stream;
 
             let mut state_lock = state.lock().unwrap();
             *state_lock = State::CONNECTING;
