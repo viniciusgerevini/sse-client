@@ -90,6 +90,16 @@ impl EventStream {
                             if let Some(ref f) = *on_open_listener {
                                 f();
                             }
+                        } else if line.starts_with("HTTP/1.1 ") {
+                            let status = &line[9..];
+                            if !status.starts_with("200") {
+                                let mut on_error_listener = on_error_listener.lock().unwrap();
+                                if let Some(ref f) = *on_error_listener {
+                                    f(status.to_string());
+                                }
+                                *state = State::CLOSED;
+                                break
+                            }
                         }
                     }
                     _ => {
@@ -272,6 +282,27 @@ mod tests {
         rx.recv().unwrap();
 
         assert_eq!(event_stream.state(), State::CLOSED);
+    }
+
+    #[test]
+    fn should_trigger_error_when_status_code_is_not_success() {
+        let (tx, rx) = mpsc::channel();
+        let (mut event_stream, fake_server) = setup();
+
+        event_stream.on_error(move |message| {
+            tx.send(message).unwrap();
+        });
+
+        fake_server.send("HTTP/1.1 500 Internal Server Error\n");
+        fake_server.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
+        fake_server.send("\n");
+
+        let message = rx.recv().unwrap();
+
+        assert_eq!(message, "500 Internal Server Error");
+
+        event_stream.close();
+        fake_server.close();
     }
 }
 
