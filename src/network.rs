@@ -15,7 +15,7 @@ pub enum State {
 }
 
 pub struct EventStream {
-    pub stream: TcpStream,
+    stream: TcpStream,
     state: Arc<Mutex<State>>,
     on_open_listener: Arc<Mutex<Option<Box<Fn() + Send>>>>,
     on_message_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
