@@ -8,6 +8,11 @@ use std::sync::Mutex;
 use std::io::BufReader;
 use std::time::Duration;
 
+type Callback = Arc<Mutex<Option<Box<Fn(String) + Send>>>>;
+type CallbackNoArgs = Arc<Mutex<Option<Box<Fn() + Send>>>>;
+type StreamWrapper = Arc<Mutex<Option<TcpStream>>>;
+type StateWrapper = Arc<Mutex<State>>;
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum State {
     CONNECTING,
@@ -23,11 +28,11 @@ enum StreamAction {
 
 pub struct EventStream {
     url: Arc<Url>,
-    stream: Arc<Mutex<Option<TcpStream>>>,
-    state: Arc<Mutex<State>>,
-    on_open_listener: Arc<Mutex<Option<Box<Fn() + Send>>>>,
-    on_message_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
-    on_error_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+    stream: StreamWrapper,
+    state: StateWrapper,
+    on_open_listener: CallbackNoArgs,
+    on_message_listener: Callback,
+    on_error_listener: Callback
 }
 
 impl EventStream {
@@ -88,11 +93,11 @@ impl EventStream {
 
 fn listen_stream(
     url: Arc<Url>,
-    stream: Arc<Mutex<Option<TcpStream>>>,
-    state: Arc<Mutex<State>>,
-    on_open: Arc<Mutex<Option<Box<Fn() + Send>>>>,
-    on_message: Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
-    on_error: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+    stream: StreamWrapper,
+    state: StateWrapper,
+    on_open: CallbackNoArgs,
+    on_message: Callback,
+    on_error: Callback
 ) {
     thread::spawn(move || {
         let action = match connect_event_stream(&url, &stream) {
@@ -106,7 +111,7 @@ fn listen_stream(
     });
 }
 
-fn connect_event_stream(url: &Url, stream: &Arc<Mutex<Option<TcpStream>>>) -> Result<TcpStream, Error> {
+fn connect_event_stream(url: &Url, stream: &StreamWrapper) -> Result<TcpStream, Error> {
     let connection_stream = event_stream_handshake(url)?;
 
     let mut stream_lock = stream.lock().unwrap();
@@ -149,10 +154,10 @@ fn get_host(url: &Url) -> String {
 
 fn read_stream(
     connection_stream: TcpStream,
-    state: &Arc<Mutex<State>>,
-    on_open: &Arc<Mutex<Option<Box<Fn() + Send>>>>,
-    on_message: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
-    on_error: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+    state: &StateWrapper,
+    on_open: &CallbackNoArgs,
+    on_message: &Callback,
+    on_error: &Callback
 ) -> StreamAction {
 
     let reader = BufReader::new(connection_stream);
@@ -189,8 +194,8 @@ fn read_stream(
 fn handle_headers(
     line: String,
     state: &mut State,
-    on_open: &Arc<Mutex<Option<Box<Fn() + Send>>>>,
-    on_error: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+    on_open: &CallbackNoArgs,
+    on_error: &Callback
 ) -> StreamAction  {
     if line == "" {
         *state = State::OPEN;
@@ -217,7 +222,7 @@ fn handle_headers(
 
 }
 
-fn handle_messages(line: String, on_message: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>) {
+fn handle_messages(line: String, on_message: &Callback) {
     let on_message = on_message.lock().unwrap();
     if let Some(ref f) = *on_message {
         f(line);
@@ -226,11 +231,11 @@ fn handle_messages(line: String, on_message: &Arc<Mutex<Option<Box<Fn(String) + 
 
 fn reconnect_stream(
     url: Arc<Url>,
-    stream: Arc<Mutex<Option<TcpStream>>>,
-    state: Arc<Mutex<State>>,
-    on_open: Arc<Mutex<Option<Box<Fn() + Send>>>>,
-    on_message: Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
-    on_error: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+    stream: StreamWrapper,
+    state: StateWrapper,
+    on_open: CallbackNoArgs,
+    on_message: Callback,
+    on_error: Callback
 ) {
     thread::sleep(Duration::from_millis(500));
 
