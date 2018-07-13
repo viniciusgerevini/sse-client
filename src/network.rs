@@ -15,6 +15,12 @@ pub enum State {
     CLOSED
 }
 
+#[derive(Debug, PartialEq)]
+enum StreamAction {
+    CONTINUE,
+    RECONNECT
+}
+
 pub struct EventStream {
     url: Arc<Url>,
     stream: Arc<Mutex<Option<TcpStream>>>,
@@ -26,21 +32,13 @@ pub struct EventStream {
 
 impl EventStream {
     pub fn new(url: Url) -> Result<EventStream, Error> {
-        let state = Arc::new(Mutex::new(State::CONNECTING));
-        let on_open_listener = Arc::new(Mutex::new(None));
-        let on_message_listener = Arc::new(Mutex::new(None));
-        let on_error_listener = Arc::new(Mutex::new(None));
-        let stream = Arc::new(Mutex::new(None));
-
-        let url = Arc::new(url);
-
         let event_stream = EventStream {
-            url,
-            stream,
-            state,
-            on_open_listener,
-            on_message_listener,
-            on_error_listener
+            url: Arc::new(url),
+            stream: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(State::CONNECTING)),
+            on_open_listener: Arc::new(Mutex::new(None)),
+            on_message_listener: Arc::new(Mutex::new(None)),
+            on_error_listener: Arc::new(Mutex::new(None))
         };
 
         event_stream.listen();
@@ -49,13 +47,14 @@ impl EventStream {
     }
 
     fn listen(&self) {
-        let stream = Arc::clone(&self.stream);
-        let state = Arc::clone(&self.state);
-        let on_open_listener = Arc::clone(&self.on_open_listener);
-        let on_message_listener = Arc::clone(&self.on_message_listener);
-        let on_error_listener = Arc::clone(&self.on_error_listener);
-        let url = Arc::clone(&self.url);
-        process_stream(url, stream, state, on_open_listener, on_message_listener, on_error_listener);
+        listen_stream(
+            Arc::clone(&self.url),
+            Arc::clone(&self.stream),
+            Arc::clone(&self.state),
+            Arc::clone(&self.on_open_listener),
+            Arc::clone(&self.on_message_listener),
+            Arc::clone(&self.on_error_listener)
+        );
     }
 
     pub fn close(&self) {
@@ -87,7 +86,36 @@ impl EventStream {
     }
 }
 
-fn connect_event_stream(url: &Url) -> Result<TcpStream, Error> {
+fn listen_stream(
+    url: Arc<Url>,
+    stream: Arc<Mutex<Option<TcpStream>>>,
+    state: Arc<Mutex<State>>,
+    on_open: Arc<Mutex<Option<Box<Fn() + Send>>>>,
+    on_message: Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
+    on_error: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+) {
+    thread::spawn(move || {
+        let action = match connect_event_stream(&url, &stream) {
+            Ok(stream) => read_stream(stream, &state, &on_open, &on_message, &on_error),
+            _ => StreamAction::RECONNECT
+        };
+
+        if action == StreamAction::RECONNECT {
+             reconnect_stream(url, stream, state, on_open, on_message, on_error)
+        }
+    });
+}
+
+fn connect_event_stream(url: &Url, stream: &Arc<Mutex<Option<TcpStream>>>) -> Result<TcpStream, Error> {
+    let connection_stream = event_stream_handshake(url)?;
+
+    let mut stream_lock = stream.lock().unwrap();
+    *stream_lock = Some(connection_stream.try_clone().unwrap());
+
+    Ok(connection_stream)
+}
+
+fn event_stream_handshake(url: &Url) -> Result<TcpStream, Error> {
     let path = url.path();
     let host = get_host(&url);
     let host = host.as_str();
@@ -101,7 +129,7 @@ fn connect_event_stream(url: &Url) -> Result<TcpStream, Error> {
     );
 
     stream.write(request.as_bytes())?;
-    stream.flush().unwrap();
+    stream.flush()?;
 
     Ok(stream)
 }
@@ -119,7 +147,85 @@ fn get_host(url: &Url) -> String {
     host
 }
 
-fn process_stream(
+fn read_stream(
+    connection_stream: TcpStream,
+    state: &Arc<Mutex<State>>,
+    on_open_listener: &Arc<Mutex<Option<Box<Fn() + Send>>>>,
+    on_message_listener: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
+    on_error_listener: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+) -> StreamAction {
+
+    let reader = BufReader::new(connection_stream);
+
+    for line in reader.lines() {
+        let mut state = state.lock().unwrap();
+
+        let line = match line {
+            Ok(l) => l,
+            Err(error) => {
+                let mut on_error_listener = on_error_listener.lock().unwrap();
+                if let Some(ref f) = *on_error_listener {
+                    f(error.to_string());
+                }
+                *state = State::CLOSED;
+                return StreamAction::RECONNECT;
+            }
+        };
+
+        match *state {
+            State::CONNECTING => {
+                if let StreamAction::RECONNECT = handle_headers(
+                    line, &mut state, &on_open_listener, &on_error_listener
+                ) {
+                    return StreamAction::RECONNECT;
+                }
+            }
+            _ => handle_messages(line, &on_message_listener)
+        }
+    }
+
+    StreamAction::CONTINUE
+}
+
+fn handle_headers(
+    line: String,
+    state: &mut State,
+    on_open_listener: &Arc<Mutex<Option<Box<Fn() + Send>>>>,
+    on_error_listener: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+) -> StreamAction  {
+    if line == "" {
+        *state = State::OPEN;
+        let on_open_listener = on_open_listener.lock().unwrap();
+        if let Some(ref f) = *on_open_listener {
+            f();
+        }
+        return StreamAction::CONTINUE
+    }
+    if !line.starts_with("HTTP/1.1 ") {
+        return StreamAction::CONTINUE
+    }
+    let status = &line[9..];
+    if !status.starts_with("200") {
+        let on_error_listener = on_error_listener.lock().unwrap();
+        if let Some(ref f) = *on_error_listener {
+            f(status.to_string());
+        }
+        *state = State::CLOSED;
+        return StreamAction::RECONNECT
+    } else {
+        return StreamAction::CONTINUE
+    }
+
+}
+
+fn handle_messages(line: String, on_message_listener: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>) {
+    let on_message_listener = on_message_listener.lock().unwrap();
+    if let Some(ref f) = *on_message_listener {
+        f(line);
+    }
+}
+
+fn reconnect_stream(
     url: Arc<Url>,
     stream: Arc<Mutex<Option<TcpStream>>>,
     state: Arc<Mutex<State>>,
@@ -127,79 +233,22 @@ fn process_stream(
     on_message_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
     on_error_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
 ) {
-    let connection_stream = {
-        let mut stream_lock = stream.lock().unwrap();
-        let s = connect_event_stream(&url).unwrap();
-        *stream_lock = Some(s.try_clone().unwrap());
-        s
-    };
+    thread::sleep(Duration::from_millis(500));
 
-    thread::spawn(move || {
-        let mut reconnect = false;
-        let reader = BufReader::new(connection_stream);
+    let mut state_lock = state.lock().unwrap();
+    *state_lock = State::CONNECTING;
 
-        for line in reader.lines() {
-            let mut state = state.lock().unwrap();
+    listen_stream(
+        url,
+        stream,
+        Arc::clone(&state),
+        on_open_listener,
+        on_message_listener,
+        on_error_listener
+    );
 
-            let line = match line {
-                Ok(l) => l,
-                Err(error) => {
-                    let mut on_error_listener = on_error_listener.lock().unwrap();
-                    if let Some(ref f) = *on_error_listener {
-                        f(error.to_string());
-                    }
-                    *state = State::CLOSED;
-                    reconnect = true;
-                    break
-                }
-            };
-
-
-            match *state {
-                State::CONNECTING => {
-                    if line == "" {
-                        *state = State::OPEN;
-                        let mut on_open_listener = on_open_listener.lock().unwrap();
-                        if let Some(ref f) = *on_open_listener {
-                            f();
-                        }
-                    } else if line.starts_with("HTTP/1.1 ") {
-                        let status = &line[9..];
-                        if !status.starts_with("200") {
-                            let mut on_error_listener = on_error_listener.lock().unwrap();
-                            if let Some(ref f) = *on_error_listener {
-                                f(status.to_string());
-                            }
-                            *state = State::CLOSED;
-                            reconnect = true;
-                            break
-                        }
-                    }
-                }
-                _ => {
-                    let mut on_message_listener = on_message_listener.lock().unwrap();
-                    if let Some(ref f) = *on_message_listener {
-                        f(line);
-                    }
-                }
-            }
-        }
-
-        if reconnect {
-            thread::sleep(Duration::from_millis(500));
-
-            let mut state_lock = state.lock().unwrap();
-            *state_lock = State::CONNECTING;
-
-            let stream = Arc::clone(&stream);
-            let state = Arc::clone(&state);
-            let on_open_listener = Arc::clone(&on_open_listener);
-            let on_message_listener = Arc::clone(&on_message_listener);
-            let on_error_listener = Arc::clone(&on_error_listener);
-            process_stream(url, stream, state, on_open_listener, on_message_listener, on_error_listener);
-        }
-    });
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -325,6 +374,7 @@ mod tests {
             tx.send(message).unwrap();
         });
 
+        thread::sleep(Duration::from_millis(2000));
         fake_server.close();
 
         rx.recv().unwrap();
@@ -372,7 +422,31 @@ mod tests {
         error_rx.recv().unwrap();
 
         let fake_server = fake_server.reconnect();
-        thread::sleep(Duration::from_millis(900));
+        thread::sleep(Duration::from_millis(2000));
+        fake_server.send("\ndata: some message\n\n");
+
+        let message = rx.recv().unwrap();
+        assert_eq!(message, "data: some message");
+
+        event_stream.close();
+        fake_server.close();
+    }
+
+    #[test]
+    fn should_reconnect_when_first_connection_fails() {
+        let url = Url::parse("http://localhost:7763/sub").unwrap();
+        let mut event_stream = EventStream::new(url).unwrap();
+
+
+        let (tx, rx) = mpsc::channel();
+
+        event_stream.on_message(move |message| {
+            tx.send(message).unwrap();
+        });
+
+
+        let fake_server = FakeServer::create("localhost:7763");
+        thread::sleep(Duration::from_millis(1000));
         fake_server.send("\ndata: some message\n\n");
 
         let message = rx.recv().unwrap();

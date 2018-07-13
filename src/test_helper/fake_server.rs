@@ -15,6 +15,10 @@ impl FakeServer {
         listen(TcpListener::bind("localhost:0").unwrap())
     }
 
+    pub fn create(url: &str) -> FakeServer {
+        listen(TcpListener::bind(url).unwrap())
+    }
+
     pub fn reconnect(&self) -> FakeServer {
         listen(self.listener.try_clone().unwrap())
     }
