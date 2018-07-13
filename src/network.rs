@@ -168,11 +168,7 @@ fn read_stream(
         let line = match line {
             Ok(l) => l,
             Err(error) => {
-                let mut on_error = on_error.lock().unwrap();
-                if let Some(ref f) = *on_error {
-                    f(error.to_string());
-                }
-                *state = State::CLOSED;
+                handle_error(error.to_string(), &mut state, on_error);
                 return StreamAction::RECONNECT;
             }
         };
@@ -210,16 +206,11 @@ fn handle_headers(
     }
     let status = &line[9..];
     if !status.starts_with("200") {
-        let on_error = on_error.lock().unwrap();
-        if let Some(ref f) = *on_error {
-            f(status.to_string());
-        }
-        *state = State::CLOSED;
+        handle_error(status.to_string(), state, on_error);
         return StreamAction::RECONNECT
     } else {
         return StreamAction::CONTINUE
     }
-
 }
 
 fn handle_messages(line: String, on_message: &Callback) {
@@ -227,6 +218,14 @@ fn handle_messages(line: String, on_message: &Callback) {
     if let Some(ref f) = *on_message {
         f(line);
     }
+}
+
+fn handle_error(message: String, state: &mut State, on_error: &Callback) {
+    let on_error = on_error.lock().unwrap();
+    if let Some(ref f) = *on_error {
+        f(message);
+    }
+    *state = State::CLOSED;
 }
 
 fn reconnect_stream(
