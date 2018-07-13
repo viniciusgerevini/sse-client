@@ -150,9 +150,9 @@ fn get_host(url: &Url) -> String {
 fn read_stream(
     connection_stream: TcpStream,
     state: &Arc<Mutex<State>>,
-    on_open_listener: &Arc<Mutex<Option<Box<Fn() + Send>>>>,
-    on_message_listener: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
-    on_error_listener: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+    on_open: &Arc<Mutex<Option<Box<Fn() + Send>>>>,
+    on_message: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
+    on_error: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>
 ) -> StreamAction {
 
     let reader = BufReader::new(connection_stream);
@@ -163,8 +163,8 @@ fn read_stream(
         let line = match line {
             Ok(l) => l,
             Err(error) => {
-                let mut on_error_listener = on_error_listener.lock().unwrap();
-                if let Some(ref f) = *on_error_listener {
+                let mut on_error = on_error.lock().unwrap();
+                if let Some(ref f) = *on_error {
                     f(error.to_string());
                 }
                 *state = State::CLOSED;
@@ -175,12 +175,11 @@ fn read_stream(
         match *state {
             State::CONNECTING => {
                 if let StreamAction::RECONNECT = handle_headers(
-                    line, &mut state, &on_open_listener, &on_error_listener
-                ) {
+                    line, &mut state, &on_open, &on_error) {
                     return StreamAction::RECONNECT;
                 }
             }
-            _ => handle_messages(line, &on_message_listener)
+            _ => handle_messages(line, &on_message)
         }
     }
 
@@ -190,13 +189,13 @@ fn read_stream(
 fn handle_headers(
     line: String,
     state: &mut State,
-    on_open_listener: &Arc<Mutex<Option<Box<Fn() + Send>>>>,
-    on_error_listener: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+    on_open: &Arc<Mutex<Option<Box<Fn() + Send>>>>,
+    on_error: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>
 ) -> StreamAction  {
     if line == "" {
         *state = State::OPEN;
-        let on_open_listener = on_open_listener.lock().unwrap();
-        if let Some(ref f) = *on_open_listener {
+        let on_open = on_open.lock().unwrap();
+        if let Some(ref f) = *on_open {
             f();
         }
         return StreamAction::CONTINUE
@@ -206,8 +205,8 @@ fn handle_headers(
     }
     let status = &line[9..];
     if !status.starts_with("200") {
-        let on_error_listener = on_error_listener.lock().unwrap();
-        if let Some(ref f) = *on_error_listener {
+        let on_error = on_error.lock().unwrap();
+        if let Some(ref f) = *on_error {
             f(status.to_string());
         }
         *state = State::CLOSED;
@@ -218,9 +217,9 @@ fn handle_headers(
 
 }
 
-fn handle_messages(line: String, on_message_listener: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>) {
-    let on_message_listener = on_message_listener.lock().unwrap();
-    if let Some(ref f) = *on_message_listener {
+fn handle_messages(line: String, on_message: &Arc<Mutex<Option<Box<Fn(String) + Send>>>>) {
+    let on_message = on_message.lock().unwrap();
+    if let Some(ref f) = *on_message {
         f(line);
     }
 }
@@ -229,24 +228,16 @@ fn reconnect_stream(
     url: Arc<Url>,
     stream: Arc<Mutex<Option<TcpStream>>>,
     state: Arc<Mutex<State>>,
-    on_open_listener: Arc<Mutex<Option<Box<Fn() + Send>>>>,
-    on_message_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
-    on_error_listener: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
+    on_open: Arc<Mutex<Option<Box<Fn() + Send>>>>,
+    on_message: Arc<Mutex<Option<Box<Fn(String) + Send>>>>,
+    on_error: Arc<Mutex<Option<Box<Fn(String) + Send>>>>
 ) {
     thread::sleep(Duration::from_millis(500));
 
     let mut state_lock = state.lock().unwrap();
     *state_lock = State::CONNECTING;
 
-    listen_stream(
-        url,
-        stream,
-        Arc::clone(&state),
-        on_open_listener,
-        on_message_listener,
-        on_error_listener
-    );
-
+    listen_stream(url, stream, Arc::clone(&state), on_open, on_message, on_error);
 }
 
 
