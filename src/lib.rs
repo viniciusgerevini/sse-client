@@ -309,20 +309,4 @@ mod tests {
 
         fake_server.close();
     }
-
-    #[test]
-    fn should_trigger_error_when_connection_closed_by_server() {
-        let (tx, rx) = mpsc::channel();
-
-        let (event_source, fake_server) = setup();
-
-        event_source.add_event_listener("error", move |event| {
-            tx.send(event).unwrap();
-        });
-
-        fake_server.close();
-        let message = rx.recv().unwrap();
-
-        assert_eq!(message.type_, String::from("error"));
-    }
 }
