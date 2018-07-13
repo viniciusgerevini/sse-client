@@ -286,7 +286,7 @@ mod tests {
         fake_server.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
         fake_server.send("\n");
 
-        rx.recv().unwrap();
+        let _ = rx.recv().unwrap();
 
         event_stream.close();
         fake_server.close();
@@ -374,10 +374,9 @@ mod tests {
             tx.send(message).unwrap();
         });
 
-        thread::sleep(Duration::from_millis(2000));
         fake_server.close();
 
-        rx.recv().unwrap();
+        let _ = rx.recv().unwrap();
 
         assert_eq!(event_stream.state(), State::CLOSED);
     }
@@ -419,10 +418,10 @@ mod tests {
 
         fake_server.close();
 
-        error_rx.recv().unwrap();
+        let _ = error_rx.recv().unwrap();
 
         let fake_server = fake_server.reconnect();
-        thread::sleep(Duration::from_millis(2000));
+
         fake_server.send("\ndata: some message\n\n");
 
         let message = rx.recv().unwrap();
@@ -446,7 +445,7 @@ mod tests {
 
 
         let fake_server = FakeServer::create("localhost:7763");
-        thread::sleep(Duration::from_millis(1000));
+
         fake_server.send("\ndata: some message\n\n");
 
         let message = rx.recv().unwrap();
