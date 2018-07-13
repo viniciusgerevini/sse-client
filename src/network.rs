@@ -114,8 +114,8 @@ fn listen_stream(
 fn connect_event_stream(url: &Url, stream: &StreamWrapper) -> Result<TcpStream, Error> {
     let connection_stream = event_stream_handshake(url)?;
 
-    let mut stream_lock = stream.lock().unwrap();
-    *stream_lock = Some(connection_stream.try_clone().unwrap());
+    let mut stream = stream.lock().unwrap();
+    *stream = Some(connection_stream.try_clone().unwrap());
 
     Ok(connection_stream)
 }
