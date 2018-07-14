@@ -22,7 +22,6 @@ pub enum State {
 
 #[derive(Debug, PartialEq)]
 enum StreamAction {
-    CONTINUE,
     RECONNECT
 }
 
@@ -102,11 +101,11 @@ fn listen_stream(
     thread::spawn(move || {
         let action = match connect_event_stream(&url, &stream) {
             Ok(stream) => read_stream(stream, &state, &on_open, &on_message, &on_error),
-            _ => StreamAction::RECONNECT
+            _ => Err(StreamAction::RECONNECT)
         };
 
-        if action == StreamAction::RECONNECT {
-             reconnect_stream(url, stream, state, on_open, on_message, on_error)
+        if let Err(StreamAction::RECONNECT) = action  {
+            reconnect_stream(url, stream, state, on_open, on_message, on_error)
         }
     });
 }
@@ -158,33 +157,24 @@ fn read_stream(
     on_open: &CallbackNoArgs,
     on_message: &Callback,
     on_error: &Callback
-) -> StreamAction {
-
+) -> Result<(), StreamAction> {
     let reader = BufReader::new(connection_stream);
 
     for line in reader.lines() {
         let mut state = state.lock().unwrap();
 
-        let line = match line {
-            Ok(l) => l,
-            Err(error) => {
-                handle_error(error.to_string(), &mut state, on_error);
-                return StreamAction::RECONNECT;
-            }
-        };
+        let line = line.map_err(|error| {
+            handle_error(error.to_string(), &mut state, on_error);
+            StreamAction::RECONNECT
+        })?;
 
         match *state {
-            State::CONNECTING => {
-                if let StreamAction::RECONNECT = handle_headers(
-                    line, &mut state, &on_open, &on_error) {
-                    return StreamAction::RECONNECT;
-                }
-            }
+            State::CONNECTING => handle_headers(line, &mut state, &on_open, &on_error)?,
             _ => handle_messages(line, &on_message)
         }
     }
 
-    StreamAction::CONTINUE
+    Ok(())
 }
 
 fn handle_headers(
@@ -192,24 +182,24 @@ fn handle_headers(
     state: &mut State,
     on_open: &CallbackNoArgs,
     on_error: &Callback
-) -> StreamAction  {
+) -> Result<(), StreamAction> {
     if line == "" {
         *state = State::OPEN;
         let on_open = on_open.lock().unwrap();
         if let Some(ref f) = *on_open {
             f();
         }
-        return StreamAction::CONTINUE
+        return Ok(())
     }
     if !line.starts_with("HTTP/1.1 ") {
-        return StreamAction::CONTINUE
+        return Ok(())
     }
     let status = &line[9..];
     if !status.starts_with("200") {
         handle_error(status.to_string(), state, on_error);
-        return StreamAction::RECONNECT
+        return Err(StreamAction::RECONNECT)
     } else {
-        return StreamAction::CONTINUE
+        return Ok(())
     }
 }
 
