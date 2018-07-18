@@ -93,7 +93,7 @@ mod tests {
         let fake_server = fake_server::FakeServer::new();
         let address = format!("http://{}/sub", fake_server.socket_address());
         let event_source = EventSource::new(address.as_str()).unwrap();
-
+        thread::sleep(Duration::from_millis(100));
         (event_source, fake_server)
     }
 

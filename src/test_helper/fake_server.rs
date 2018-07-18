@@ -2,10 +2,11 @@ use std::io::prelude::*;
 use std::net::TcpListener;
 use std::thread;
 use std::sync::mpsc;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::mem;
 
 pub struct FakeServer {
-    listener: TcpListener,
     address: String,
     client_tx: mpsc::Sender<&'static str>
 }
@@ -17,10 +18,6 @@ impl FakeServer {
 
     pub fn create(url: &str) -> FakeServer {
         listen(TcpListener::bind(url).unwrap())
-    }
-
-    pub fn reconnect(&self) -> FakeServer {
-        listen(self.listener.try_clone().unwrap())
     }
 
     pub fn send(&self, message: &'static str) {
@@ -52,25 +49,35 @@ fn listen(connection: TcpListener) -> FakeServer {
 
         server_tx.send(address).unwrap();
 
-        for stream in listener.incoming() {
-            let mut stream = stream.unwrap();
+        let client = Arc::new(Mutex::new(None));
+        let c = Arc::clone(&client);
 
-            for received in server_rx {
-                match received {
-                    "close" => break,
-                    _ => {
+        thread::spawn(move|| {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut client = c.lock().unwrap();
+                *client = Some(stream.try_clone().unwrap());
+            }
+        });
+
+        for received in &server_rx {
+            let mut client = client.lock().unwrap();
+            match received {
+                "close" => {
+                    *client = None;
+                },
+                _ => {
+                    if let Some(ref mut stream) = *client {
                         stream.write(received.as_bytes()).unwrap();
                     }
                 }
             }
-            break;
         }
     });
 
     let address = String::from(client_rx.recv().unwrap());
 
     FakeServer {
-        listener: connection,
         address,
         client_tx
     }

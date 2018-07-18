@@ -101,7 +101,9 @@ fn listen_stream(
     thread::spawn(move || {
         let action = match connect_event_stream(&url, &stream) {
             Ok(stream) => read_stream(stream, &state, &on_open, &on_message, &on_error),
-            _ => Err(StreamAction::RECONNECT)
+            _ => {
+                Err(StreamAction::RECONNECT)
+            }
         };
 
         if let Err(StreamAction::RECONNECT) = action  {
@@ -248,6 +250,8 @@ mod tests {
         let url = Url::parse(address.as_str()).unwrap();
         let event_stream = EventStream::new(url).unwrap();
 
+        thread::sleep(Duration::from_millis(100));
+
         (event_stream, fake_server)
     }
 
@@ -294,7 +298,6 @@ mod tests {
 
         fake_server.send("\n");
         thread::sleep(Duration::from_millis(200));
-
         let state = event_stream.state();
         assert_eq!(state, State::OPEN);
 
@@ -390,12 +393,7 @@ mod tests {
     #[test]
     fn should_reconnect_when_connection_closed_by_server() {
         let (tx, rx) = mpsc::channel();
-        let (error_tx, error_rx) = mpsc::channel();
         let (mut event_stream, fake_server) = setup();
-
-        event_stream.on_error(move |message| {
-            error_tx.send(message).unwrap();
-        });
 
         event_stream.on_message(move |message| {
             tx.send(message).unwrap();
@@ -403,14 +401,14 @@ mod tests {
 
         fake_server.close();
 
-        let _ = error_rx.recv().unwrap();
-
-        let fake_server = fake_server.reconnect();
-
-        fake_server.send("\ndata: some message\n\n");
-
-        let message = rx.recv().unwrap();
-        assert_eq!(message, "data: some message");
+        loop {
+            thread::sleep(Duration::from_millis(400));
+            fake_server.send("\ndata: some message\n\n");
+            if let Ok(message) = rx.try_recv() {
+                assert_eq!(message, "data: some message");
+                break;
+            }
+        }
 
         event_stream.close();
         fake_server.close();
@@ -428,10 +426,13 @@ mod tests {
             tx.send(message).unwrap();
         });
 
+        thread::sleep(Duration::from_millis(500));
 
         let fake_server = FakeServer::create("localhost:7763");
+        thread::sleep(Duration::from_millis(100));
 
-        fake_server.send("\ndata: some message\n\n");
+        fake_server.send("\n");
+        fake_server.send("data: some message\n");
 
         let message = rx.recv().unwrap();
         assert_eq!(message, "data: some message");
