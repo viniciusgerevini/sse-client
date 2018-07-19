@@ -101,7 +101,9 @@ fn listen_stream(
     thread::spawn(move || {
         let action = match connect_event_stream(&url, &stream) {
             Ok(stream) => read_stream(stream, &state, &on_open, &on_message, &on_error),
-            _ => {
+            Err(error) => {
+                let mut state = state.lock().unwrap();
+                handle_error(error.to_string(), &mut state, &on_error);
                 Err(StreamAction::RECONNECT)
             }
         };
@@ -439,6 +441,23 @@ mod tests {
 
         event_stream.close();
         fake_server.close();
+    }
+
+    #[test]
+    fn should_trigger_error_when_first_connection_fails() {
+        let url = Url::parse("http://localhost:7777/sub").unwrap();
+        let mut event_stream = EventStream::new(url).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+
+        event_stream.on_error(move |message| {
+            tx.send(message).unwrap();
+        });
+
+        let message = rx.recv().unwrap();
+        assert!(message.contains("Connection refused"));
+
+        event_stream.close();
     }
 }
 
