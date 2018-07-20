@@ -1,14 +1,17 @@
 use std::io::prelude::*;
 use std::net::TcpListener;
+use std::net::TcpStream;
 use std::thread;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::mem;
+use std::io::BufReader;
 
 pub struct FakeServer {
     address: String,
-    client_tx: mpsc::Sender<&'static str>
+    client_tx: mpsc::Sender<&'static str>,
+    client: Arc<Mutex<Option<TcpStream>>>
 }
 
 impl FakeServer {
@@ -31,13 +34,51 @@ impl FakeServer {
     pub fn socket_address(&self) -> String {
         self.address.clone()
     }
+
+    pub fn on_client_message<F>(&mut self, listener: F) where F: Fn(String) + Send + 'static {
+        listen_to_client_message(&self.client, &Arc::new(Mutex::new(listener)));
+    }
+
+}
+
+fn listen_to_client_message<F>(client: &Arc<Mutex<Option<TcpStream>>>, listener: &Arc<Mutex<F>>) where F: Fn(String) + Send + 'static {
+    let mut stream = None;
+
+    {
+        let client = client.lock().unwrap();
+        if let Some(ref s) = *client {
+            stream = Some(s.try_clone().unwrap());
+        }
+    }
+
+    if let Some(stream) = stream {
+        let listener = Arc::clone(&listener);
+        let client = Arc::clone(&client);
+
+        thread::spawn(move || {
+            let reader = BufReader::new(stream);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    let listener = listener.lock().unwrap();
+                    listener(line)
+                } else {
+                    break;
+                }
+            }
+
+            listen_to_client_message(&client, &listener);
+        });
+    }
 }
 
 fn listen(connection: TcpListener) -> FakeServer {
     let (client_tx, server_rx) = mpsc::channel();
     let (server_tx, client_rx) = mpsc::channel();
-
+    let client = Arc::new(Mutex::new(None));
     let listener = connection.try_clone().unwrap();
+
+    let current_client = Arc::clone(&client);
+
     thread::spawn(move || {
         let local_address = format!("localhost:{}", listener.local_addr().unwrap().port());
         let address: &str;
@@ -49,19 +90,19 @@ fn listen(connection: TcpListener) -> FakeServer {
 
         server_tx.send(address).unwrap();
 
-        let client = Arc::new(Mutex::new(None));
-        let c = Arc::clone(&client);
+        let c = Arc::clone(&current_client);
 
         thread::spawn(move|| {
             for stream in listener.incoming() {
                 let mut stream = stream.unwrap();
                 let mut client = c.lock().unwrap();
+
                 *client = Some(stream.try_clone().unwrap());
             }
         });
 
         for received in &server_rx {
-            let mut client = client.lock().unwrap();
+            let mut client = current_client.lock().unwrap();
             match received {
                 "close" => {
                     *client = None;
@@ -79,6 +120,7 @@ fn listen(connection: TcpListener) -> FakeServer {
 
     FakeServer {
         address,
-        client_tx
+        client_tx,
+        client
     }
 }
