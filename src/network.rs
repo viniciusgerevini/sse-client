@@ -465,13 +465,13 @@ mod tests {
         let (error_tx, error_rx) = mpsc::channel();
         let (mut event_stream, mut fake_server) = setup();
 
-        let list = Arc::new(Mutex::new(0));
-        let l = Arc::clone(&list);
+        let number_of_retries = Arc::new(Mutex::new(0));
+        let l = Arc::clone(&number_of_retries);
 
         fake_server.on_client_message(move |message| {
             if message.starts_with("GET") {
-                let mut list = l.lock().unwrap();
-                *list += 1;
+                let mut number_of_retries = l.lock().unwrap();
+                *number_of_retries += 1;
             }
         });
 
@@ -485,8 +485,8 @@ mod tests {
         assert_eq!(message, "204 No Content");
 
         loop {
-            let list = list.lock().unwrap();
-            if *list > 1 {
+            let number_of_retries = number_of_retries.lock().unwrap();
+            if *number_of_retries == 2 {
                 break;
             }
         }
@@ -495,5 +495,31 @@ mod tests {
         fake_server.close();
     }
 
+    #[test]
+    fn should_reset_connection_on_status_205() {
+        let (event_stream, mut fake_server) = setup();
+
+        let number_of_retries = Arc::new(Mutex::new(0));
+        let l = Arc::clone(&number_of_retries);
+
+        fake_server.on_client_message(move |message| {
+            if message.starts_with("GET") {
+                let mut number_of_retries = l.lock().unwrap();
+                *number_of_retries += 1;
+            }
+        });
+
+        fake_server.send("HTTP/1.1 205 Reset Content\n");
+
+        loop {
+            let number_of_retries = number_of_retries.lock().unwrap();
+            if *number_of_retries == 2 {
+                break;
+            }
+        }
+
+        event_stream.close();
+        fake_server.close();
+    }
 }
 
