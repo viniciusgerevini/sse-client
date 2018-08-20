@@ -22,7 +22,8 @@ pub enum State {
 
 #[derive(Debug, PartialEq)]
 enum StreamAction {
-    RECONNECT
+    RECONNECT,
+    CLOSE
 }
 
 pub struct EventStream {
@@ -195,6 +196,14 @@ fn handle_headers(
         }
         return Ok(())
     }
+
+    if line.starts_with("Content-Type") {
+        if !line.contains("text/event-stream") {
+            handle_error(String::from("Wrong Content-Type"), state, on_error);
+            return Err(StreamAction::CLOSE)
+        }
+    }
+
     if !line.starts_with("HTTP/1.1 ") {
         return Ok(())
     }
@@ -521,5 +530,30 @@ mod tests {
         event_stream.close();
         fake_server.close();
     }
+
+    #[test]
+    fn should_close_connection_when_content_type_is_not_event_stream() {
+        let (error_tx, error_rx) = mpsc::channel();
+        let (mut event_stream, fake_server) = setup();
+
+        event_stream.on_error(move |message| {
+            error_tx.send(message).unwrap();
+        });
+
+        fake_server.send("HTTP/1.1 200 OK\n");
+        fake_server.send("Content-Type: text/html\n");
+
+        let message = error_rx.recv().unwrap();
+        assert_eq!(message, "Wrong Content-Type");
+
+        thread::sleep(Duration::from_millis(1000));
+
+        let state = event_stream.state();
+        assert_eq!(state, State::CLOSED);
+
+        fake_server.close();
+    }
+
+
 }
 
