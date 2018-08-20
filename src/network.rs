@@ -208,11 +208,15 @@ fn handle_headers(
         return Ok(())
     }
     let status = &line[9..];
-    if !status.starts_with("200") {
+
+    if status.starts_with("200") {
+        return Ok(())
+    } else if status.starts_with("2") {
         handle_error(status.to_string(), state, on_error);
         return Err(StreamAction::RECONNECT)
     } else {
-        return Ok(())
+        handle_error(status.to_string(), state, on_error);
+        return Err(StreamAction::CLOSE)
     }
 }
 
@@ -580,5 +584,29 @@ mod tests {
         event_stream.close();
         fake_server.close();
     }
+
+    #[test]
+    fn should_close_connection_when_returned_any_status_not_handled_in_privous_scenarios() {
+        let (error_tx, error_rx) = mpsc::channel();
+        let (mut event_stream, fake_server) = setup();
+
+        event_stream.on_error(move |message| {
+            error_tx.send(message).unwrap();
+        });
+
+        fake_server.send("HTTP/1.1 500 Internal Server Error\n");
+
+        let message = error_rx.recv().unwrap();
+        assert_eq!(message, "500 Internal Server Error");
+
+        thread::sleep(Duration::from_millis(1000));
+
+        let state = event_stream.state();
+        assert_eq!(state, State::CLOSED);
+
+        fake_server.close();
+    }
+
+
 }
 
