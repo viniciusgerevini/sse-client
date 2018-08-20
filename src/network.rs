@@ -554,6 +554,31 @@ mod tests {
         fake_server.close();
     }
 
+    #[test]
+    fn should_reconnect_when_status_in_range_2xx_but_not_200() {
+        let (event_stream, mut fake_server) = setup();
 
+        let number_of_retries = Arc::new(Mutex::new(0));
+        let l = Arc::clone(&number_of_retries);
+
+        fake_server.on_client_message(move |message| {
+            if message.starts_with("GET") {
+                let mut number_of_retries = l.lock().unwrap();
+                *number_of_retries += 1;
+            }
+        });
+
+        fake_server.send("HTTP/1.1 202 Accepted\n");
+
+        loop {
+            let number_of_retries = number_of_retries.lock().unwrap();
+            if *number_of_retries == 2 {
+                break;
+            }
+        }
+
+        event_stream.close();
+        fake_server.close();
+    }
 }
 
