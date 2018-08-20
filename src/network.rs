@@ -191,31 +191,41 @@ fn handle_headers(
     on_open: &CallbackNoArgs
 ) -> Result<(), StreamAction> {
     if line == "" {
-        *state = State::OPEN;
-        let on_open = on_open.lock().unwrap();
-        if let Some(ref f) = *on_open {
-            f();
-        }
-        return Ok(())
-    }
-
-    if line.starts_with("Content-Type") {
-        if !line.contains("text/event-stream") {
-            return Err(StreamAction::CLOSE(String::from("Wrong Content-Type")))
-        }
-    }
-
-    if !line.starts_with("HTTP/1.1 ") {
-        return Ok(())
-    }
-    let status = &line[9..];
-
-    if status.starts_with("200") {
-        return Ok(())
-    } else if status.starts_with("2") {
-        return Err(StreamAction::RECONNECT(status.to_string()))
+        handle_open_connection(state, on_open)
+    } else if line.starts_with("Content-Type") {
+        validate_content_type(line)
+    } else if line.starts_with("HTTP/1.1 ") {
+        validate_status_code(line)
     } else {
-        return Err(StreamAction::CLOSE(status.to_string()))
+        Ok(())
+    }
+}
+
+fn handle_open_connection(state: &mut State, on_open: &CallbackNoArgs) -> Result<(), StreamAction> {
+    *state = State::OPEN;
+    let on_open = on_open.lock().unwrap();
+    if let Some(ref f) = *on_open {
+        f();
+    }
+    Ok(())
+}
+
+fn validate_content_type(line: String) -> Result<(), StreamAction> {
+    if line.contains("text/event-stream") {
+        Ok(())
+    } else {
+        Err(StreamAction::CLOSE(String::from("Wrong Content-Type")))
+    }
+}
+
+fn validate_status_code(line: String) -> Result<(), StreamAction> {
+    let status = &line[9..];
+    let status_code: i32 = status[..3].parse().unwrap();
+
+    match status_code {
+        200 => Ok(()),
+        200 ... 299 => Err(StreamAction::RECONNECT(status.to_string())),
+        _ => Err(StreamAction::CLOSE(status.to_string()))
     }
 }
 
