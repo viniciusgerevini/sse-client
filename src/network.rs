@@ -22,8 +22,8 @@ pub enum State {
 
 #[derive(Debug, PartialEq)]
 enum StreamAction {
-    RECONNECT,
-    CLOSE
+    RECONNECT(String),
+    CLOSE(String)
 }
 
 pub struct EventStream {
@@ -101,16 +101,21 @@ fn listen_stream(
 ) {
     thread::spawn(move || {
         let action = match connect_event_stream(&url, &stream) {
-            Ok(stream) => read_stream(stream, &state, &on_open, &on_message, &on_error),
-            Err(error) => {
-                let mut state = state.lock().unwrap();
-                handle_error(error.to_string(), &mut state, &on_error);
-                Err(StreamAction::RECONNECT)
-            }
+            Ok(stream) => read_stream(stream, &state, &on_open, &on_message),
+            Err(error) => Err(StreamAction::RECONNECT(error.to_string()))
         };
 
-        if let Err(StreamAction::RECONNECT) = action  {
-            reconnect_stream(url, stream, state, on_open, on_message, on_error)
+        if let Err(stream_action) = action  {
+            match stream_action {
+                StreamAction::RECONNECT(ref error) | StreamAction::CLOSE(ref error) => {
+                    let mut state = state.lock().unwrap();
+                    handle_error(error.to_string(), &mut state, &on_error);
+                }
+            };
+
+            if let StreamAction::RECONNECT(_) = stream_action  {
+                reconnect_stream(url, stream, state, on_open, on_message, on_error)
+            }
         }
     });
 }
@@ -160,8 +165,7 @@ fn read_stream(
     connection_stream: TcpStream,
     state: &StateWrapper,
     on_open: &CallbackNoArgs,
-    on_message: &Callback,
-    on_error: &Callback
+    on_message: &Callback
 ) -> Result<(), StreamAction> {
     let reader = BufReader::new(connection_stream);
 
@@ -169,12 +173,11 @@ fn read_stream(
         let mut state = state.lock().unwrap();
 
         let line = line.map_err(|error| {
-            handle_error(error.to_string(), &mut state, on_error);
-            StreamAction::RECONNECT
+            StreamAction::RECONNECT(error.to_string())
         })?;
 
         match *state {
-            State::CONNECTING => handle_headers(line, &mut state, &on_open, &on_error)?,
+            State::CONNECTING => handle_headers(line, &mut state, &on_open)?,
             _ => handle_messages(line, &on_message)
         }
     }
@@ -185,8 +188,7 @@ fn read_stream(
 fn handle_headers(
     line: String,
     state: &mut State,
-    on_open: &CallbackNoArgs,
-    on_error: &Callback
+    on_open: &CallbackNoArgs
 ) -> Result<(), StreamAction> {
     if line == "" {
         *state = State::OPEN;
@@ -199,8 +201,7 @@ fn handle_headers(
 
     if line.starts_with("Content-Type") {
         if !line.contains("text/event-stream") {
-            handle_error(String::from("Wrong Content-Type"), state, on_error);
-            return Err(StreamAction::CLOSE)
+            return Err(StreamAction::CLOSE(String::from("Wrong Content-Type")))
         }
     }
 
@@ -212,11 +213,9 @@ fn handle_headers(
     if status.starts_with("200") {
         return Ok(())
     } else if status.starts_with("2") {
-        handle_error(status.to_string(), state, on_error);
-        return Err(StreamAction::RECONNECT)
+        return Err(StreamAction::RECONNECT(status.to_string()))
     } else {
-        handle_error(status.to_string(), state, on_error);
-        return Err(StreamAction::CLOSE)
+        return Err(StreamAction::CLOSE(status.to_string()))
     }
 }
 
