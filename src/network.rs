@@ -23,7 +23,8 @@ pub enum State {
 #[derive(Debug, PartialEq)]
 enum StreamAction {
     RECONNECT(String),
-    CLOSE(String)
+    CLOSE(String),
+    MOVE(Url)
 }
 
 pub struct EventStream {
@@ -53,6 +54,7 @@ impl EventStream {
 
     fn listen(&self) {
         listen_stream(
+            Arc::clone(&self.url),
             Arc::clone(&self.url),
             Arc::clone(&self.stream),
             Arc::clone(&self.state),
@@ -93,6 +95,7 @@ impl EventStream {
 
 fn listen_stream(
     url: Arc<Url>,
+    connection_url: Arc<Url>,
     stream: StreamWrapper,
     state: StateWrapper,
     on_open: CallbackNoArgs,
@@ -100,29 +103,33 @@ fn listen_stream(
     on_error: Callback
 ) {
     thread::spawn(move || {
-        let action = match connect_event_stream(&url, &stream) {
+        let action = match connect_event_stream(&connection_url, &stream) {
             Ok(stream) => read_stream(stream, &state, &on_open, &on_message),
             Err(error) => Err(StreamAction::RECONNECT(error.to_string()))
         };
 
         if let Err(stream_action) = action  {
             match stream_action {
-                StreamAction::RECONNECT(ref error) | StreamAction::CLOSE(ref error) => {
-                    let mut state = state.lock().unwrap();
-                    handle_error(error.to_string(), &mut state, &on_error);
+                StreamAction::RECONNECT(ref error) => {
+                    handle_error(error.to_string(), &mut state.lock().unwrap(), &on_error);
+                    reconnect_stream(url, stream, state, on_open, on_message, on_error);
+                },
+                StreamAction::CLOSE(ref error) => {
+                    handle_error(error.to_string(), &mut state.lock().unwrap(), &on_error);
+                },
+                StreamAction::MOVE(redirect_url) => {
+                    let mut state_lock = state.lock().unwrap();
+                    *state_lock = State::CONNECTING;
+
+                    listen_stream(url, Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error);
                 }
             };
-
-            if let StreamAction::RECONNECT(_) = stream_action  {
-                reconnect_stream(url, stream, state, on_open, on_message, on_error)
-            }
         }
     });
 }
 
 fn connect_event_stream(url: &Url, stream: &StreamWrapper) -> Result<TcpStream, Error> {
     let connection_stream = event_stream_handshake(url)?;
-
     let mut stream = stream.lock().unwrap();
     *stream = Some(connection_stream.try_clone().unwrap());
 
@@ -168,6 +175,7 @@ fn read_stream(
     on_message: &Callback
 ) -> Result<(), StreamAction> {
     let reader = BufReader::new(connection_stream);
+    let mut previous_line = String::from("nothing");
 
     for line in reader.lines() {
         let mut state = state.lock().unwrap();
@@ -177,9 +185,10 @@ fn read_stream(
         })?;
 
         match *state {
-            State::CONNECTING => handle_headers(line, &mut state, &on_open)?,
-            _ => handle_messages(line, &on_message)
+            State::CONNECTING => handle_headers(line.clone(), &mut state, &on_open, &previous_line)?,
+            _ => handle_messages(line.clone(), &on_message)
         }
+        previous_line = line;
     }
 
     Ok(())
@@ -188,7 +197,8 @@ fn read_stream(
 fn handle_headers(
     line: String,
     state: &mut State,
-    on_open: &CallbackNoArgs
+    on_open: &CallbackNoArgs,
+    previous_line: &str
 ) -> Result<(), StreamAction> {
     if line == "" {
         handle_open_connection(state, on_open)
@@ -196,6 +206,8 @@ fn handle_headers(
         validate_content_type(line)
     } else if line.starts_with("HTTP/1.1 ") {
         validate_status_code(line)
+    } else if line.starts_with("Location:") {
+        handle_new_location(line, previous_line)
     } else {
         Ok(())
     }
@@ -223,9 +235,18 @@ fn validate_status_code(line: String) -> Result<(), StreamAction> {
     let status_code: i32 = status[..3].parse().unwrap();
 
     match status_code {
-        200 => Ok(()),
+        200 | 302 => Ok(()),
         200 ... 299 => Err(StreamAction::RECONNECT(status.to_string())),
         _ => Err(StreamAction::CLOSE(status.to_string()))
+    }
+}
+
+fn handle_new_location(line: String, previous_line: &str) -> Result<(), StreamAction> {
+    let status_code = &previous_line[9..12];
+    let location = &line[10..];
+    match status_code {
+        "302" => Err(StreamAction::MOVE(Url::parse(location).unwrap())),
+        _ => Ok(())
     }
 }
 
@@ -257,7 +278,7 @@ fn reconnect_stream(
     let mut state_lock = state.lock().unwrap();
     *state_lock = State::CONNECTING;
 
-    listen_stream(url, stream, Arc::clone(&state), on_open, on_message, on_error);
+    listen_stream(url.clone(), url, stream, Arc::clone(&state), on_open, on_message, on_error);
 }
 
 
@@ -616,6 +637,29 @@ mod tests {
         fake_server.close();
     }
 
+    #[test]
+    fn should_connect_to_provided_host_when_status_302() {
+        let (event_stream, fake_server) = setup();
+        let mut fake_server_2 = FakeServer::create("localhost:65444");
 
+        let (redirect_server_tx, redirect_server_rx) = mpsc::channel();
+
+        fake_server.send("HTTP/1.1 302 Found\n");
+        fake_server.send("Location: http://localhost:65444/sub\n");
+
+        thread::sleep(Duration::from_millis(200));
+
+        fake_server_2.on_client_message(move |message| {
+            if message.starts_with("GET") {
+                redirect_server_tx.send("connection open with second server").unwrap();
+            }
+        });
+
+        assert_eq!(redirect_server_rx.recv().unwrap(), "connection open with second server");
+
+        event_stream.close();
+        fake_server.close();
+        fake_server_2.close();
+    }
 }
 
