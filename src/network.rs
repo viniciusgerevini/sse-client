@@ -661,5 +661,30 @@ mod tests {
         fake_server.close();
         fake_server_2.close();
     }
+
+    #[test]
+    fn should_reconnect_to_original_host_when_connection_to_redirected_host_is_lost() {
+        let (mut event_stream, fake_server) = setup();
+
+        let (tx, rx) = mpsc::channel();
+
+        event_stream.on_message(move |message| {
+            tx.send(message).unwrap();
+        });
+
+        fake_server.send("HTTP/1.1 302 Found\n");
+        fake_server.send("Location: http://localhost:6544/sub\n");
+
+        thread::sleep(Duration::from_millis(600));
+
+        fake_server.send("HTTP/1.1 200 Ok\n\n");
+        fake_server.send("data: some message\n\n");
+
+        let message = rx.recv().unwrap();
+        assert_eq!(message, "data: some message");
+
+        event_stream.close();
+        fake_server.close();
+    }
 }
 
