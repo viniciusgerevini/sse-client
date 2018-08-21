@@ -24,7 +24,8 @@ pub enum State {
 enum StreamAction {
     RECONNECT(String),
     CLOSE(String),
-    MOVE(Url)
+    MOVE(Url),
+    MOVE_PERMANENTLY(Url)
 }
 
 pub struct EventStream {
@@ -122,6 +123,12 @@ fn listen_stream(
                     *state_lock = State::CONNECTING;
 
                     listen_stream(url, Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error);
+                },
+                StreamAction::MOVE_PERMANENTLY(redirect_url) => {
+                    let mut state_lock = state.lock().unwrap();
+                    *state_lock = State::CONNECTING;
+
+                    listen_stream(Arc::new(redirect_url.clone()), Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error);
                 }
             };
         }
@@ -235,7 +242,7 @@ fn validate_status_code(line: String) -> Result<(), StreamAction> {
     let status_code: i32 = status[..3].parse().unwrap();
 
     match status_code {
-        200 | 302 => Ok(()),
+        200 | 301 | 302 => Ok(()),
         200 ... 299 => Err(StreamAction::RECONNECT(status.to_string())),
         _ => Err(StreamAction::CLOSE(status.to_string()))
     }
@@ -244,7 +251,9 @@ fn validate_status_code(line: String) -> Result<(), StreamAction> {
 fn handle_new_location(line: String, previous_line: &str) -> Result<(), StreamAction> {
     let status_code = &previous_line[9..12];
     let location = &line[10..];
+
     match status_code {
+        "301" => Err(StreamAction::MOVE_PERMANENTLY(Url::parse(location).unwrap())),
         "302" => Err(StreamAction::MOVE(Url::parse(location).unwrap())),
         _ => Ok(())
     }
@@ -684,6 +693,39 @@ mod tests {
         assert_eq!(message, "data: some message");
 
         event_stream.close();
+        fake_server.close();
+    }
+
+
+    #[test]
+    fn should_reconnect_to_new_host_when_connection_lost_after_moved_permanently() {
+        let (mut event_stream, fake_server) = setup();
+        let fake_server_2 = FakeServer::create("localhost:60444");
+
+        let (tx, rx) = mpsc::channel();
+
+        event_stream.on_message(move |message| {
+            tx.send(message).unwrap();
+        });
+
+        fake_server.send("HTTP/1.1 301 Moved Permanently\n");
+        fake_server.send("Location: http://localhost:60444/sub\n");
+
+        thread::sleep(Duration::from_millis(600));
+
+        fake_server_2.close();
+
+        loop {
+            thread::sleep(Duration::from_millis(600));
+            fake_server_2.send("\ndata: from server 2\n\n");
+            if let Ok(message) = rx.try_recv() {
+                assert_eq!(message, "data: from server 2");
+                break;
+            }
+        }
+
+        event_stream.close();
+        fake_server_2.close();
         fake_server.close();
     }
 }
