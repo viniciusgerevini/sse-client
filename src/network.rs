@@ -15,9 +15,9 @@ type StateWrapper = Arc<Mutex<State>>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum State {
-    CONNECTING,
-    OPEN,
-    CLOSED
+    Connecting,
+    Open,
+    Closed
 }
 
 #[derive(Debug, PartialEq)]
@@ -42,7 +42,7 @@ impl EventStream {
         let event_stream = EventStream {
             url: Arc::new(url),
             stream: Arc::new(Mutex::new(None)),
-            state: Arc::new(Mutex::new(State::CONNECTING)),
+            state: Arc::new(Mutex::new(State::Connecting)),
             on_open_listener: Arc::new(Mutex::new(None)),
             on_message_listener: Arc::new(Mutex::new(None)),
             on_error_listener: Arc::new(Mutex::new(None))
@@ -70,7 +70,7 @@ impl EventStream {
             st.shutdown(Shutdown::Both).unwrap();
         }
         let mut state = self.state.lock().unwrap();
-        *state = State::CLOSED;
+        *state = State::Closed;
     }
 
     pub fn on_open<F>(&mut self, listener: F) where F: Fn() + Send + 'static {
@@ -120,13 +120,13 @@ fn listen_stream(
                 },
                 StreamAction::Move(redirect_url) => {
                     let mut state_lock = state.lock().unwrap();
-                    *state_lock = State::CONNECTING;
+                    *state_lock = State::Connecting;
 
                     listen_stream(url, Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error);
                 },
                 StreamAction::MovePermanently(redirect_url) => {
                     let mut state_lock = state.lock().unwrap();
-                    *state_lock = State::CONNECTING;
+                    *state_lock = State::Connecting;
 
                     listen_stream(Arc::new(redirect_url.clone()), Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error);
                 }
@@ -192,7 +192,7 @@ fn read_stream(
         })?;
 
         match *state {
-            State::CONNECTING => handle_headers(line.clone(), &mut state, &on_open, &previous_line)?,
+            State::Connecting => handle_headers(line.clone(), &mut state, &on_open, &previous_line)?,
             _ => handle_messages(line.clone(), &on_message)
         }
         previous_line = line;
@@ -221,7 +221,7 @@ fn handle_headers(
 }
 
 fn handle_open_connection(state: &mut State, on_open: &CallbackNoArgs) -> Result<(), StreamAction> {
-    *state = State::OPEN;
+    *state = State::Open;
     let on_open = on_open.lock().unwrap();
     if let Some(ref f) = *on_open {
         f();
@@ -271,7 +271,7 @@ fn handle_error(message: String, state: &mut State, on_error: &Callback) {
     if let Some(ref f) = *on_error {
         f(message);
     }
-    *state = State::CLOSED;
+    *state = State::Closed;
 }
 
 fn reconnect_stream(
@@ -285,7 +285,7 @@ fn reconnect_stream(
     thread::sleep(Duration::from_millis(500));
 
     let mut state_lock = state.lock().unwrap();
-    *state_lock = State::CONNECTING;
+    *state_lock = State::Connecting;
 
     listen_stream(url.clone(), url, stream, Arc::clone(&state), on_open, on_message, on_error);
 }
@@ -340,7 +340,7 @@ mod tests {
         let (event_stream, fake_server) = setup();
 
         let state = event_stream.state();
-        assert_eq!(state, State::CONNECTING);
+        assert_eq!(state, State::Connecting);
 
         event_stream.close();
         fake_server.close();
@@ -353,7 +353,7 @@ mod tests {
         fake_server.send("\n");
         thread::sleep(Duration::from_millis(200));
         let state = event_stream.state();
-        assert_eq!(state, State::OPEN);
+        assert_eq!(state, State::Open);
 
         event_stream.close();
         fake_server.close();
@@ -367,7 +367,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         let state = event_stream.state();
-        assert_eq!(state, State::CLOSED);
+        assert_eq!(state, State::Closed);
 
         fake_server.close();
     }
@@ -420,7 +420,7 @@ mod tests {
 
         let _ = rx.recv().unwrap();
 
-        assert_eq!(event_stream.state(), State::CLOSED);
+        assert_eq!(event_stream.state(), State::Closed);
     }
 
     #[test]
@@ -592,7 +592,7 @@ mod tests {
         thread::sleep(Duration::from_millis(1000));
 
         let state = event_stream.state();
-        assert_eq!(state, State::CLOSED);
+        assert_eq!(state, State::Closed);
 
         fake_server.close();
     }
@@ -641,7 +641,7 @@ mod tests {
         thread::sleep(Duration::from_millis(1000));
 
         let state = event_stream.state();
-        assert_eq!(state, State::CLOSED);
+        assert_eq!(state, State::Closed);
 
         fake_server.close();
     }

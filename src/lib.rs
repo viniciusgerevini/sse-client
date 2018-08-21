@@ -295,17 +295,17 @@ mod tests {
     fn should_return_stream_connection_status() {
         let (event_source, fake_server) = setup();
 
-        assert_eq!(event_source.state(), State::CONNECTING);
+        assert_eq!(event_source.state(), State::Connecting);
 
         fake_server.send("\n");
         thread::sleep(Duration::from_millis(200));
 
-        assert_eq!(event_source.state(), State::OPEN);
+        assert_eq!(event_source.state(), State::Open);
 
         event_source.close();
         thread::sleep(Duration::from_millis(200));
 
-        assert_eq!(event_source.state(), State::CLOSED);
+        assert_eq!(event_source.state(), State::Closed);
 
         fake_server.close();
     }
