@@ -242,7 +242,7 @@ fn validate_status_code(line: String) -> Result<(), StreamAction> {
     let status_code: i32 = status[..3].parse().unwrap();
 
     match status_code {
-        200 | 301 | 302 => Ok(()),
+        200 | 301 | 302 | 303 | 307 => Ok(()),
         200 ... 299 => Err(StreamAction::Reconnect(status.to_string())),
         _ => Err(StreamAction::Close(status.to_string()))
     }
@@ -254,7 +254,7 @@ fn handle_new_location(line: String, previous_line: &str) -> Result<(), StreamAc
 
     match status_code {
         "301" => Err(StreamAction::MovePermanently(Url::parse(location).unwrap())),
-        "302" => Err(StreamAction::Move(Url::parse(location).unwrap())),
+        "302" | "303" | "307" => Err(StreamAction::Move(Url::parse(location).unwrap())),
         _ => Ok(())
     }
 }
@@ -696,7 +696,6 @@ mod tests {
         fake_server.close();
     }
 
-
     #[test]
     fn should_reconnect_to_new_host_when_connection_lost_after_moved_permanently() {
         let (mut event_stream, fake_server) = setup();
@@ -714,6 +713,66 @@ mod tests {
         thread::sleep(Duration::from_millis(600));
 
         fake_server_2.close();
+
+        loop {
+            thread::sleep(Duration::from_millis(600));
+            fake_server_2.send("\ndata: from server 2\n\n");
+            if let Ok(message) = rx.try_recv() {
+                assert_eq!(message, "data: from server 2");
+                break;
+            }
+        }
+
+        event_stream.close();
+        fake_server_2.close();
+        fake_server.close();
+    }
+
+    #[test]
+    fn should_connect_to_new_host_when_status_303() {
+        let (mut event_stream, fake_server) = setup();
+        let fake_server_2 = FakeServer::create("localhost:60445");
+
+        let (tx, rx) = mpsc::channel();
+
+        event_stream.on_message(move |message| {
+            tx.send(message).unwrap();
+        });
+
+        fake_server.send("HTTP/1.1 303 See Other\n");
+        fake_server.send("Location: http://localhost:60445/sub\n");
+
+        thread::sleep(Duration::from_millis(600));
+
+        loop {
+            thread::sleep(Duration::from_millis(600));
+            fake_server_2.send("\ndata: from server 2\n\n");
+            if let Ok(message) = rx.try_recv() {
+                assert_eq!(message, "data: from server 2");
+                break;
+            }
+        }
+
+        event_stream.close();
+        fake_server_2.close();
+        fake_server.close();
+    }
+
+    #[test]
+    fn should_connect_to_new_host_when_status_307() {
+        let (mut event_stream, fake_server) = setup();
+        let fake_server_2 = FakeServer::create("localhost:60446");
+
+        let (tx, rx) = mpsc::channel();
+
+        event_stream.on_message(move |message| {
+            tx.send(message).unwrap();
+        });
+
+        fake_server.send("HTTP/1.1 307 Temporary Redirect\n");
+        fake_server.send("Location: http://localhost:60446/sub\n");
+
+        thread::sleep(Duration::from_millis(600));
 
         loop {
             thread::sleep(Duration::from_millis(600));
