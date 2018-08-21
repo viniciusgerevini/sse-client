@@ -22,10 +22,10 @@ pub enum State {
 
 #[derive(Debug, PartialEq)]
 enum StreamAction {
-    RECONNECT(String),
-    CLOSE(String),
-    MOVE(Url),
-    MOVE_PERMANENTLY(Url)
+    Reconnect(String),
+    Close(String),
+    Move(Url),
+    MovePermanently(Url)
 }
 
 pub struct EventStream {
@@ -106,25 +106,25 @@ fn listen_stream(
     thread::spawn(move || {
         let action = match connect_event_stream(&connection_url, &stream) {
             Ok(stream) => read_stream(stream, &state, &on_open, &on_message),
-            Err(error) => Err(StreamAction::RECONNECT(error.to_string()))
+            Err(error) => Err(StreamAction::Reconnect(error.to_string()))
         };
 
         if let Err(stream_action) = action  {
             match stream_action {
-                StreamAction::RECONNECT(ref error) => {
+                StreamAction::Reconnect(ref error) => {
                     handle_error(error.to_string(), &mut state.lock().unwrap(), &on_error);
                     reconnect_stream(url, stream, state, on_open, on_message, on_error);
                 },
-                StreamAction::CLOSE(ref error) => {
+                StreamAction::Close(ref error) => {
                     handle_error(error.to_string(), &mut state.lock().unwrap(), &on_error);
                 },
-                StreamAction::MOVE(redirect_url) => {
+                StreamAction::Move(redirect_url) => {
                     let mut state_lock = state.lock().unwrap();
                     *state_lock = State::CONNECTING;
 
                     listen_stream(url, Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error);
                 },
-                StreamAction::MOVE_PERMANENTLY(redirect_url) => {
+                StreamAction::MovePermanently(redirect_url) => {
                     let mut state_lock = state.lock().unwrap();
                     *state_lock = State::CONNECTING;
 
@@ -188,7 +188,7 @@ fn read_stream(
         let mut state = state.lock().unwrap();
 
         let line = line.map_err(|error| {
-            StreamAction::RECONNECT(error.to_string())
+            StreamAction::Reconnect(error.to_string())
         })?;
 
         match *state {
@@ -233,7 +233,7 @@ fn validate_content_type(line: String) -> Result<(), StreamAction> {
     if line.contains("text/event-stream") {
         Ok(())
     } else {
-        Err(StreamAction::CLOSE(String::from("Wrong Content-Type")))
+        Err(StreamAction::Close(String::from("Wrong Content-Type")))
     }
 }
 
@@ -243,8 +243,8 @@ fn validate_status_code(line: String) -> Result<(), StreamAction> {
 
     match status_code {
         200 | 301 | 302 => Ok(()),
-        200 ... 299 => Err(StreamAction::RECONNECT(status.to_string())),
-        _ => Err(StreamAction::CLOSE(status.to_string()))
+        200 ... 299 => Err(StreamAction::Reconnect(status.to_string())),
+        _ => Err(StreamAction::Close(status.to_string()))
     }
 }
 
@@ -253,8 +253,8 @@ fn handle_new_location(line: String, previous_line: &str) -> Result<(), StreamAc
     let location = &line[10..];
 
     match status_code {
-        "301" => Err(StreamAction::MOVE_PERMANENTLY(Url::parse(location).unwrap())),
-        "302" => Err(StreamAction::MOVE(Url::parse(location).unwrap())),
+        "301" => Err(StreamAction::MovePermanently(Url::parse(location).unwrap())),
+        "302" => Err(StreamAction::Move(Url::parse(location).unwrap())),
         _ => Ok(())
     }
 }
