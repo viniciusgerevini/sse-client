@@ -67,7 +67,7 @@ impl EventBuilder {
 }
 
 fn parse_field<'a>(message: &'a str) -> (&'a str, &'a str) {
-    let parts: Vec<&str> = message.split(":").collect();
+    let parts: Vec<&str> = message.splitn(2, ":").collect();
     (parts[0], parts[1].trim())
 }
 
@@ -214,5 +214,21 @@ mod tests {
         let mut e = EventBuilder::new();
         assert_eq!(e.update("event: some_event"), e.get_event());
         assert_eq!(e.update("data: test"), e.get_event());
+    }
+
+    #[test]
+    fn should_parse_messages_even_with_colons() {
+        let expected_event = Event::new("some:id:with:colons", "some:data:with:colons");
+        let mut e = EventBuilder::new();
+
+        e.update("event: some:id:with:colons");
+        e.update("data: some:data:with:colons");
+
+        if let EventBuilderState::Pending(event) = e.get_event() {
+            assert_eq!(event, expected_event);
+        } else {
+            panic!("event should be pending");
+        }
+
     }
 }
