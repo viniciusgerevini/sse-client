@@ -13,6 +13,8 @@ type CallbackNoArgs = Arc<Mutex<Option<Box<Fn() + Send>>>>;
 type StreamWrapper = Arc<Mutex<Option<TcpStream>>>;
 type StateWrapper = Arc<Mutex<State>>;
 
+const INITIAL_RECONNECTION_TIME_IN_MS: u64 = 500;
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum State {
     Connecting,
@@ -286,7 +288,7 @@ fn reconnect_stream(
     on_message: Callback,
     on_error: Callback
 ) {
-    thread::sleep(Duration::from_millis(500));
+    thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
     listen_stream(url.clone(), url, stream, Arc::clone(&state), on_open, on_message, on_error);
 }
 
@@ -440,7 +442,7 @@ mod tests {
         fake_server.close();
 
         loop {
-            thread::sleep(Duration::from_millis(400));
+            thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
             fake_server.send("\ndata: some message\n\n");
             if let Ok(message) = rx.try_recv() {
                 assert_eq!(message, "data: some message");
@@ -464,7 +466,7 @@ mod tests {
             tx.send(message).unwrap();
         });
 
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
 
         let fake_server = FakeServer::create("localhost:7763");
         thread::sleep(Duration::from_millis(100));
@@ -538,7 +540,7 @@ mod tests {
         let message = error_rx.recv().unwrap();
         assert_eq!(message, "Wrong Content-Type");
 
-        thread::sleep(Duration::from_millis(1000));
+        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
 
         let state = event_stream.state();
         assert_eq!(state, State::Closed);
@@ -633,7 +635,7 @@ mod tests {
         fake_server.send("HTTP/1.1 302 Found\n");
         fake_server.send("Location: http://localhost:6544/sub\n");
 
-        thread::sleep(Duration::from_millis(600));
+        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS + 100));
 
         fake_server.send("HTTP/1.1 200 Ok\n\n");
         fake_server.send("data: some message\n\n");
@@ -659,12 +661,12 @@ mod tests {
         fake_server.send("HTTP/1.1 301 Moved Permanently\n");
         fake_server.send("Location: http://localhost:60444/sub\n");
 
-        thread::sleep(Duration::from_millis(600));
+        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS + 100));
 
         fake_server_2.close();
 
         loop {
-            thread::sleep(Duration::from_millis(600));
+            thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
             fake_server_2.send("\ndata: from server 2\n\n");
             if let Ok(message) = rx.try_recv() {
                 assert_eq!(message, "data: from server 2");
@@ -691,10 +693,8 @@ mod tests {
         fake_server.send("HTTP/1.1 303 See Other\n");
         fake_server.send("Location: http://localhost:60445/sub\n");
 
-        thread::sleep(Duration::from_millis(600));
-
         loop {
-            thread::sleep(Duration::from_millis(600));
+            thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
             fake_server_2.send("\ndata: from server 2\n\n");
             if let Ok(message) = rx.try_recv() {
                 assert_eq!(message, "data: from server 2");
@@ -721,10 +721,8 @@ mod tests {
         fake_server.send("HTTP/1.1 307 Temporary Redirect\n");
         fake_server.send("Location: http://localhost:60446/sub\n");
 
-        thread::sleep(Duration::from_millis(600));
-
         loop {
-            thread::sleep(Duration::from_millis(600));
+            thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
             fake_server_2.send("\ndata: from server 2\n\n");
             if let Ok(message) = rx.try_recv() {
                 assert_eq!(message, "data: from server 2");
@@ -745,7 +743,7 @@ mod tests {
 
         assert_eq!(event_stream.state(), State::Connecting);
 
-        thread::sleep(Duration::from_millis(600));
+        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS + 100));
         fake_server.send("HTTP/1.1 204 No Content\n");
 
         thread::sleep(Duration::from_millis(100));
