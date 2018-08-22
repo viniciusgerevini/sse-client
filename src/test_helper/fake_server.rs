@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::mem;
 use std::io::BufReader;
+use std::time::Duration;
 
 pub struct FakeServer {
     address: String,
@@ -74,6 +75,13 @@ fn listen_to_client_message<F>(client: &Arc<Mutex<Option<TcpStream>>>, listener:
                 }
             }
 
+            listen_to_client_message(&client, &listener);
+        });
+    } else {
+        let listener = Arc::clone(&listener);
+        let client = Arc::clone(&client);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
             listen_to_client_message(&client, &listener);
         });
     }

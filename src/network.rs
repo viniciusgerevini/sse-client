@@ -63,7 +63,8 @@ impl EventStream {
             Arc::clone(&self.state),
             Arc::clone(&self.on_open_listener),
             Arc::clone(&self.on_message_listener),
-            Arc::clone(&self.on_error_listener)
+            Arc::clone(&self.on_error_listener),
+            Arc::new(Mutex::new(0))
         );
     }
 
@@ -103,11 +104,12 @@ fn listen_stream(
     state: StateWrapper,
     on_open: CallbackNoArgs,
     on_message: Callback,
-    on_error: Callback
+    on_error: Callback,
+    failed_attempts: Arc<Mutex<u32>>
 ) {
     thread::spawn(move || {
         let action = match connect_event_stream(&connection_url, &stream) {
-            Ok(stream) => read_stream(stream, &state, &on_open, &on_message),
+            Ok(stream) => read_stream(stream, &state, &on_open, &on_message, &failed_attempts),
             Err(error) => Err(StreamAction::Reconnect(error.to_string()))
         };
 
@@ -117,7 +119,7 @@ fn listen_stream(
                     let mut state_lock = state.lock().unwrap();
                     *state_lock = State::Connecting;
                     handle_error(error.to_string(),  &on_error);
-                    reconnect_stream(url, stream, Arc::clone(&state), on_open, on_message, on_error);
+                    reconnect_stream(url, stream, Arc::clone(&state), on_open, on_message, on_error, failed_attempts);
                 },
                 StreamAction::Close(ref error) => {
                     let mut state_lock = state.lock().unwrap();
@@ -128,13 +130,13 @@ fn listen_stream(
                     let mut state_lock = state.lock().unwrap();
                     *state_lock = State::Connecting;
 
-                    listen_stream(url, Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error);
+                    listen_stream(url, Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error, failed_attempts);
                 },
                 StreamAction::MovePermanently(redirect_url) => {
                     let mut state_lock = state.lock().unwrap();
                     *state_lock = State::Connecting;
 
-                    listen_stream(Arc::new(redirect_url.clone()), Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error);
+                    listen_stream(Arc::new(redirect_url.clone()), Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error, failed_attempts);
                 }
             };
         }
@@ -185,7 +187,8 @@ fn read_stream(
     connection_stream: TcpStream,
     state: &StateWrapper,
     on_open: &CallbackNoArgs,
-    on_message: &Callback
+    on_message: &Callback,
+    failed_attempts: &Arc<Mutex<u32>>
 ) -> Result<(), StreamAction> {
     let reader = BufReader::new(connection_stream);
     let mut previous_line = String::from("nothing");
@@ -198,7 +201,7 @@ fn read_stream(
         })?;
 
         match *state {
-            State::Connecting => handle_headers(line.clone(), &mut state, &on_open, &previous_line)?,
+            State::Connecting => handle_headers(line.clone(), &mut state, &on_open, &previous_line, failed_attempts)?,
             _ => handle_messages(line.clone(), &on_message)
         }
         previous_line = line;
@@ -214,10 +217,11 @@ fn handle_headers(
     line: String,
     state: &mut State,
     on_open: &CallbackNoArgs,
-    previous_line: &str
+    previous_line: &str,
+    failed_attempts: &Arc<Mutex<u32>>
 ) -> Result<(), StreamAction> {
     if line == "" {
-        handle_open_connection(state, on_open)
+        handle_open_connection(state, on_open, failed_attempts)
     } else if line.starts_with("Content-Type") {
         validate_content_type(line)
     } else if line.starts_with("HTTP/1.1 ") {
@@ -229,12 +233,14 @@ fn handle_headers(
     }
 }
 
-fn handle_open_connection(state: &mut State, on_open: &CallbackNoArgs) -> Result<(), StreamAction> {
+fn handle_open_connection(state: &mut State, on_open: &CallbackNoArgs, failed_attempts: &Arc<Mutex<u32>>) -> Result<(), StreamAction> {
     *state = State::Open;
     let on_open = on_open.lock().unwrap();
     if let Some(ref f) = *on_open {
         f();
     }
+    let mut failed_attempts = failed_attempts.lock().unwrap();
+    *failed_attempts = 0;
     Ok(())
 }
 
@@ -289,10 +295,16 @@ fn reconnect_stream(
     state: StateWrapper,
     on_open: CallbackNoArgs,
     on_message: Callback,
-    on_error: Callback
+    on_error: Callback,
+    failed_attempts: Arc<Mutex<u32>>
 ) {
-    thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
-    listen_stream(url.clone(), url, stream, Arc::clone(&state), on_open, on_message, on_error);
+    let mut attempts = failed_attempts.lock().unwrap();
+    let base: u64 = 2;
+    let reconnection_time = INITIAL_RECONNECTION_TIME_IN_MS + (15 * (base.pow(*attempts) - 1));
+    *attempts += 1;
+
+    thread::sleep(Duration::from_millis(reconnection_time));
+    listen_stream(url.clone(), url, stream, Arc::clone(&state), on_open, on_message, on_error, Arc::clone(&failed_attempts));
 }
 
 
@@ -751,6 +763,94 @@ mod tests {
 
         thread::sleep(Duration::from_millis(100));
         assert_eq!(event_stream.state(), State::Closed);
+
+        event_stream.close();
+        fake_server.close();
+    }
+
+
+    #[test]
+    fn should_try_to_reconnect_with_an_exponential_backoff() {
+        let (event_stream, mut fake_server) = setup();
+
+        let number_of_retries = Arc::new(Mutex::new(0));
+        let l = Arc::clone(&number_of_retries);
+
+        fake_server.on_client_message(move |message| {
+            if message.starts_with("GET") {
+                let mut number_of_retries = l.lock().unwrap();
+                *number_of_retries += 1;
+            }
+        });
+
+        for _ in 0 .. 20 {
+            fake_server.send("HTTP/1.1 202 Accepted\n");
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        let retries_in_first_two_seconds;
+        {
+            retries_in_first_two_seconds = *(number_of_retries.lock().unwrap());
+        }
+
+        for _ in 0 .. 20 {
+            fake_server.send("HTTP/1.1 202 Accepted\n");
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        let retries_in_the_next_two_seconds;
+        {
+            retries_in_the_next_two_seconds = *(number_of_retries.lock().unwrap()) - retries_in_first_two_seconds;
+        }
+
+        assert!(retries_in_first_two_seconds > retries_in_the_next_two_seconds);
+
+        event_stream.close();
+        fake_server.close();
+    }
+
+    #[test]
+    fn should_reset_exponential_backoff_after_success_connection() {
+        let (event_stream, mut fake_server) = setup();
+
+        let number_of_retries = Arc::new(Mutex::new(0));
+        let l = Arc::clone(&number_of_retries);
+
+        fake_server.on_client_message(move |message| {
+            if message.starts_with("GET") {
+                let mut number_of_retries = l.lock().unwrap();
+                *number_of_retries += 1;
+            }
+        });
+
+        for _ in 0 .. 20 {
+            fake_server.send("HTTP/1.1 202 Accepted\n");
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        let retries_in_first_two_seconds;
+        {
+            retries_in_first_two_seconds = *(number_of_retries.lock().unwrap());
+        }
+
+        while event_stream.state() != State::Open {
+            fake_server.send("HTTP/1.1 200 Ok\n\n");
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        fake_server.break_current_connection();
+
+        for _ in 0 .. 20 {
+            fake_server.send("HTTP/1.1 202 Accepted\n");
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        let retries_in_the_next_two_seconds;
+        {
+            retries_in_the_next_two_seconds = *(number_of_retries.lock().unwrap()) - retries_in_first_two_seconds;
+        }
+
+        assert_eq!(retries_in_first_two_seconds, retries_in_the_next_two_seconds);
 
         event_stream.close();
         fake_server.close();
