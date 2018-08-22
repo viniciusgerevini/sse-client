@@ -247,6 +247,7 @@ fn validate_status_code(line: String) -> Result<(), StreamAction> {
 
     match status_code {
         200 | 301 | 302 | 303 | 307 => Ok(()),
+        204 => Err(StreamAction::Close(status.to_string())),
         200 ... 299 => Err(StreamAction::Reconnect(status.to_string())),
         _ => Err(StreamAction::Close(status.to_string()))
     }
@@ -496,41 +497,6 @@ mod tests {
     }
 
     #[test]
-    fn should_reset_connection_on_status_204() {
-        let (error_tx, error_rx) = mpsc::channel();
-        let (mut event_stream, mut fake_server) = setup();
-
-        let number_of_retries = Arc::new(Mutex::new(0));
-        let l = Arc::clone(&number_of_retries);
-
-        fake_server.on_client_message(move |message| {
-            if message.starts_with("GET") {
-                let mut number_of_retries = l.lock().unwrap();
-                *number_of_retries += 1;
-            }
-        });
-
-        event_stream.on_error(move |message| {
-            error_tx.send(message).unwrap();
-        });
-
-        fake_server.send("HTTP/1.1 204 No Content\n");
-
-        let message = error_rx.recv().unwrap();
-        assert_eq!(message, "204 No Content");
-
-        loop {
-            let number_of_retries = number_of_retries.lock().unwrap();
-            if *number_of_retries == 2 {
-                break;
-            }
-        }
-
-        event_stream.close();
-        fake_server.close();
-    }
-
-    #[test]
     fn should_reset_connection_on_status_205() {
         let (event_stream, mut fake_server) = setup();
 
@@ -768,6 +734,24 @@ mod tests {
 
         event_stream.close();
         fake_server_2.close();
+        fake_server.close();
+    }
+
+    #[test]
+    fn should_stop_reconnection_when_status_204() {
+        let (event_stream, fake_server) = setup();
+
+        fake_server.send("HTTP/1.1 202 Accepted\n");
+
+        assert_eq!(event_stream.state(), State::Connecting);
+
+        thread::sleep(Duration::from_millis(600));
+        fake_server.send("HTTP/1.1 204 No Content\n");
+
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(event_stream.state(), State::Closed);
+
+        event_stream.close();
         fake_server.close();
     }
 }
