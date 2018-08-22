@@ -4,6 +4,7 @@ pub struct EventBuilder {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Event {
+    pub id: String,
     pub type_: String,
     pub data: String
 }
@@ -17,7 +18,7 @@ pub enum EventBuilderState {
 
 impl Event {
     pub fn new(type_: &str, data: &str) -> Event {
-        Event { type_: String::from(type_), data: String::from(data) }
+        Event { id: String::from(""), type_: String::from(type_), data: String::from(data) }
     }
 }
 
@@ -53,6 +54,7 @@ impl EventBuilder {
         match parse_field(message) {
             ("data", value) => pending_event.data = String::from(value),
             ("event", value) => pending_event.type_ = String::from(value),
+            ("id", value) => pending_event.id = String::from(value),
             _ => {}
         }
 
@@ -132,6 +134,18 @@ mod tests {
 
         if let EventBuilderState::Pending(event) = e.get_event() {
             assert_eq!(event.type_, String::from("some_event"));
+        } else {
+            panic!("event should be pending");
+        }
+    }
+
+    #[test]
+    fn should_fill_event_id_field() {
+        let mut e = EventBuilder::new();
+        e.update("id: 123abc");
+
+        if let EventBuilderState::Pending(event) = e.get_event() {
+            assert_eq!(event.id, String::from("123abc"));
         } else {
             panic!("event should be pending");
         }

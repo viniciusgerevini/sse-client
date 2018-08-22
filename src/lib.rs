@@ -14,21 +14,25 @@ use data::{EventBuilder, EventBuilderState, Event};
 
 pub struct EventSource {
     bus: Arc<Mutex<Bus<Event>>>,
-    stream: EventStream
+    stream: Arc<Mutex<EventStream>>
 }
 
 impl EventSource {
     pub fn new(url: &str) -> Result<EventSource, ParseError> {
-        let mut stream = EventStream::new(Url::parse(url)?).unwrap();
+        let event_stream = Arc::new(Mutex::new(EventStream::new(Url::parse(url)?).unwrap()));
+        let stream_for_update = Arc::clone(&event_stream);
+        let stream = Arc::clone(&event_stream);
+        let mut event_stream = event_stream.lock().unwrap();
+
         let bus = Arc::new(Mutex::new(Bus::new()));
 
         let event_bus = Arc::clone(&bus);
-        stream.on_open(move || {
+        event_stream.on_open(move || {
             publish_initial_stream_event(&event_bus);
         });
 
         let event_bus = Arc::clone(&bus);
-        stream.on_error(move |message| {
+        event_stream.on_error(move |message| {
             let event_bus = event_bus.lock().unwrap();
             let event = Event::new("error", &message);
             event_bus.publish(event.type_.clone(), event);
@@ -36,15 +40,16 @@ impl EventSource {
 
         let event_builder = Arc::new(Mutex::new(EventBuilder::new()));
         let event_bus = Arc::clone(&bus);
-        stream.on_message(move |message| {
-            handle_message(&message, &event_builder, &event_bus);
+
+        event_stream.on_message(move |message| {
+            handle_message(&message, &event_builder, &event_bus, &stream_for_update);
         });
 
         Ok(EventSource{ stream, bus })
     }
 
     pub fn close(&self) {
-        self.stream.close();
+        self.stream.lock().unwrap().close();
     }
 
     pub fn on_open<F>(&self, listener: F) where F: Fn() + Send + 'static {
@@ -61,7 +66,7 @@ impl EventSource {
     }
 
     pub fn state(&self) -> State {
-        self.stream.state()
+        self.stream.lock().unwrap().state()
     }
 }
 
@@ -71,11 +76,17 @@ fn publish_initial_stream_event(event_bus: &Arc<Mutex<Bus<Event>>>) {
     event_bus.publish(event.type_.clone(), event);
 }
 
-fn handle_message(message: &str, event_builder: &Arc<Mutex<EventBuilder>>, event_bus: &Arc<Mutex<Bus<Event>>>) {
+fn handle_message(
+    message: &str,
+    event_builder: &Arc<Mutex<EventBuilder>>,
+    event_bus: &Arc<Mutex<Bus<Event>>>,
+    event_stream: &Arc<Mutex<EventStream>>) {
+
     let mut event_builder = event_builder.lock().unwrap();
 
     if let EventBuilderState::Complete(event) = event_builder.update(&message) {
         let event_bus = event_bus.lock().unwrap();
+        event_stream.lock().unwrap().set_last_id(event.id.clone());
         event_bus.publish(event.type_.clone(), event);
     }
 }
@@ -307,6 +318,41 @@ mod tests {
 
         assert_eq!(event_source.state(), State::Closed);
 
+        fake_server.close();
+    }
+
+
+    #[test]
+    fn should_send_last_event_id_on_reconnection_2() {
+        let (event_source, mut fake_server) = setup();
+        let expected_header = Arc::new(Mutex::new(None));
+
+        let header = Arc::clone(&expected_header);
+        fake_server.on_client_message(move |message| {
+            if message.starts_with("Last-Event-ID") {
+                let mut header = header.lock().unwrap();
+                *header = Some(message);
+            }
+        });
+
+        fake_server.send("HTTP/1.1 200 OK\n");
+        fake_server.send("\n");
+        fake_server.send("id: helpMe\n");
+        fake_server.send("data: my message\n\n");
+
+        thread::sleep(Duration::from_millis(500));
+        fake_server.break_current_connection();
+        thread::sleep(Duration::from_millis(800));
+
+        let expected_header = expected_header.lock().unwrap();
+
+        if let Some(ref header) = *expected_header {
+            assert_eq!(header, "Last-Event-ID: helpMe");
+        } else {
+            panic!("should contain last id in header");
+        }
+
+        event_source.close();
         fake_server.close();
     }
 }

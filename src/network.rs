@@ -12,6 +12,7 @@ type Callback = Arc<Mutex<Option<Box<Fn(String) + Send>>>>;
 type CallbackNoArgs = Arc<Mutex<Option<Box<Fn() + Send>>>>;
 type StreamWrapper = Arc<Mutex<Option<TcpStream>>>;
 type StateWrapper = Arc<Mutex<State>>;
+type LastIdWrapper = Arc<Mutex<Option<String>>>;
 
 const INITIAL_RECONNECTION_TIME_IN_MS: u64 = 500;
 
@@ -36,7 +37,8 @@ pub struct EventStream {
     state: StateWrapper,
     on_open_listener: CallbackNoArgs,
     on_message_listener: Callback,
-    on_error_listener: Callback
+    on_error_listener: Callback,
+    last_event_id: LastIdWrapper
 }
 
 impl EventStream {
@@ -47,7 +49,8 @@ impl EventStream {
             state: Arc::new(Mutex::new(State::Connecting)),
             on_open_listener: Arc::new(Mutex::new(None)),
             on_message_listener: Arc::new(Mutex::new(None)),
-            on_error_listener: Arc::new(Mutex::new(None))
+            on_error_listener: Arc::new(Mutex::new(None)),
+            last_event_id: Arc::new(Mutex::new(None))
         };
 
         event_stream.listen();
@@ -64,7 +67,8 @@ impl EventStream {
             Arc::clone(&self.on_open_listener),
             Arc::clone(&self.on_message_listener),
             Arc::clone(&self.on_error_listener),
-            Arc::new(Mutex::new(0))
+            Arc::new(Mutex::new(0)),
+            Arc::clone(&self.last_event_id)
         );
     }
 
@@ -95,6 +99,11 @@ impl EventStream {
         let state = &self.state.lock().unwrap();
         (*state).clone()
     }
+
+    pub fn set_last_id(&self, id: String) {
+        let mut last_id = self.last_event_id.lock().unwrap();
+        *last_id = Some(id);
+    }
 }
 
 fn listen_stream(
@@ -105,10 +114,11 @@ fn listen_stream(
     on_open: CallbackNoArgs,
     on_message: Callback,
     on_error: Callback,
-    failed_attempts: Arc<Mutex<u32>>
+    failed_attempts: Arc<Mutex<u32>>,
+    last_event_id: LastIdWrapper
 ) {
     thread::spawn(move || {
-        let action = match connect_event_stream(&connection_url, &stream) {
+        let action = match connect_event_stream(&connection_url, &stream, &last_event_id) {
             Ok(stream) => read_stream(stream, &state, &on_open, &on_message, &failed_attempts),
             Err(error) => Err(StreamAction::Reconnect(error.to_string()))
         };
@@ -119,7 +129,7 @@ fn listen_stream(
                     let mut state_lock = state.lock().unwrap();
                     *state_lock = State::Connecting;
                     handle_error(error.to_string(),  &on_error);
-                    reconnect_stream(url, stream, Arc::clone(&state), on_open, on_message, on_error, failed_attempts);
+                    reconnect_stream(url, stream, Arc::clone(&state), on_open, on_message, on_error, failed_attempts, last_event_id);
                 },
                 StreamAction::Close(ref error) => {
                     let mut state_lock = state.lock().unwrap();
@@ -130,38 +140,44 @@ fn listen_stream(
                     let mut state_lock = state.lock().unwrap();
                     *state_lock = State::Connecting;
 
-                    listen_stream(url, Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error, failed_attempts);
+                    listen_stream(url, Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error, failed_attempts, last_event_id);
                 },
                 StreamAction::MovePermanently(redirect_url) => {
                     let mut state_lock = state.lock().unwrap();
                     *state_lock = State::Connecting;
 
-                    listen_stream(Arc::new(redirect_url.clone()), Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error, failed_attempts);
+                    listen_stream(Arc::new(redirect_url.clone()), Arc::new(redirect_url), stream, Arc::clone(&state), on_open, on_message, on_error, failed_attempts, last_event_id);
                 }
             };
         }
     });
 }
 
-fn connect_event_stream(url: &Url, stream: &StreamWrapper) -> Result<TcpStream, Error> {
-    let connection_stream = event_stream_handshake(url)?;
+fn connect_event_stream(url: &Url, stream: &StreamWrapper, last_event_id: &LastIdWrapper) -> Result<TcpStream, Error> {
+    let connection_stream = event_stream_handshake(url, last_event_id)?;
     let mut stream = stream.lock().unwrap();
     *stream = Some(connection_stream.try_clone().unwrap());
 
     Ok(connection_stream)
 }
 
-fn event_stream_handshake(url: &Url) -> Result<TcpStream, Error> {
+fn event_stream_handshake(url: &Url, last_event_id: &LastIdWrapper) -> Result<TcpStream, Error> {
     let path = url.path();
     let host = get_host(&url);
     let host = host.as_str();
 
     let mut stream = TcpStream::connect(host)?;
 
+    let extra_headers = match *(last_event_id.lock().unwrap()) {
+        Some(ref last_id) => format!("Last-Event-ID: {}\r\n", last_id),
+        None => String::from("")
+    };
+
     let request = format!(
-        "GET {} HTTP/1.1\r\nAccept: text/event-stream\r\nHost: {}\r\n\r\n",
+        "GET {} HTTP/1.1\r\nAccept: text/event-stream\r\nHost: {}\r\n{}\r\n",
         path,
-        host
+        host,
+        extra_headers
     );
 
     stream.write(request.as_bytes())?;
@@ -296,7 +312,8 @@ fn reconnect_stream(
     on_open: CallbackNoArgs,
     on_message: Callback,
     on_error: Callback,
-    failed_attempts: Arc<Mutex<u32>>
+    failed_attempts: Arc<Mutex<u32>>,
+    last_event_id: LastIdWrapper
 ) {
     let mut attempts = failed_attempts.lock().unwrap();
     let base: u64 = 2;
@@ -304,7 +321,7 @@ fn reconnect_stream(
     *attempts += 1;
 
     thread::sleep(Duration::from_millis(reconnection_time));
-    listen_stream(url.clone(), url, stream, Arc::clone(&state), on_open, on_message, on_error, Arc::clone(&failed_attempts));
+    listen_stream(url.clone(), url, stream, Arc::clone(&state), on_open, on_message, on_error, Arc::clone(&failed_attempts), last_event_id);
 }
 
 
@@ -851,6 +868,36 @@ mod tests {
         }
 
         assert_eq!(retries_in_first_two_seconds, retries_in_the_next_two_seconds);
+
+        event_stream.close();
+        fake_server.close();
+    }
+
+    #[test]
+    fn should_send_last_event_id_on_reconnection() {
+        let (event_stream, mut fake_server) = setup();
+        let expected_header = Arc::new(Mutex::new(None));
+
+        event_stream.set_last_id(String::from("123abc"));
+
+        let header = Arc::clone(&expected_header);
+        fake_server.on_client_message(move |message| {
+            if message.starts_with("Last-Event-ID") {
+                let mut header = header.lock().unwrap();
+                *header = Some(message);
+            }
+        });
+
+        fake_server.send("HTTP/1.1 202 Accepted\n");
+        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS + 100));
+
+        let expected_header = expected_header.lock().unwrap();
+
+        if let Some(ref header) = *expected_header {
+            assert_eq!(header, "Last-Event-ID: 123abc");
+        } else {
+            panic!("should contain last id header");
+        }
 
         event_stream.close();
         fake_server.close();
