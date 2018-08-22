@@ -1,6 +1,6 @@
 use std::io::prelude::*;
 use std::net::TcpListener;
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::thread;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -29,6 +29,14 @@ impl FakeServer {
 
     pub fn close(&self) {
         &self.client_tx.send("close").unwrap();
+    }
+
+    pub fn break_current_connection(&self) {
+        let mut client = self.client.lock().unwrap();
+        if let Some(ref s) = *client {
+            s.shutdown(Shutdown::Both).unwrap();
+        }
+        *client = None;
     }
 
     pub fn socket_address(&self) -> String {

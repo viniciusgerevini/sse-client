@@ -68,11 +68,11 @@ impl EventStream {
     }
 
     pub fn close(&self) {
+        let mut state = self.state.lock().unwrap();
+        *state = State::Closed;
         if let Some(ref st) = *self.stream.lock().unwrap() {
             st.shutdown(Shutdown::Both).unwrap();
         }
-        let mut state = self.state.lock().unwrap();
-        *state = State::Closed;
     }
 
     pub fn on_open<F>(&mut self, listener: F) where F: Fn() + Send + 'static {
@@ -204,7 +204,10 @@ fn read_stream(
         previous_line = line;
     }
 
-    Ok(())
+    match *(state.lock().unwrap()) {
+        State::Closed => Ok(()),
+        _ => Err(StreamAction::Reconnect(String::from("connection closed by server")))
+    }
 }
 
 fn handle_headers(
@@ -439,7 +442,7 @@ mod tests {
             tx.send(message).unwrap();
         });
 
-        fake_server.close();
+        fake_server.break_current_connection();
 
         loop {
             thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
