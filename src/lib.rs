@@ -88,6 +88,7 @@ fn handle_message(
         let event_bus = event_bus.lock().unwrap();
         event_stream.lock().unwrap().set_last_id(event.id.clone());
         event_bus.publish(event.type_.clone(), event);
+        event_builder.clear();
     }
 }
 

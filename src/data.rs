@@ -30,7 +30,7 @@ impl EventBuilder {
     pub fn update(&mut self, message: &str) -> EventBuilderState {
         if message == "" {
             self.finalize_event();
-        } else {
+        } else if !message.starts_with(":") {
             self.pending_event = self.update_event(message);
         }
 
@@ -59,6 +59,10 @@ impl EventBuilder {
         }
 
         EventBuilderState::Pending(pending_event)
+    }
+
+    pub fn clear(&mut self) {
+        self.pending_event =  EventBuilderState::Empty;
     }
 
     pub fn get_event(&self) -> EventBuilderState {
@@ -230,5 +234,15 @@ mod tests {
             panic!("event should be pending");
         }
 
+    }
+
+    #[test]
+    fn should_be_empty_when_no_data_received() {
+        let mut e = EventBuilder::new();
+
+        e.update(":hi");
+        e.update("");
+
+        assert_eq!(e.get_event(), EventBuilderState::Empty);
     }
 }
