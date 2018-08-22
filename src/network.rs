@@ -112,11 +112,15 @@ fn listen_stream(
         if let Err(stream_action) = action  {
             match stream_action {
                 StreamAction::Reconnect(ref error) => {
-                    handle_error(error.to_string(), &mut state.lock().unwrap(), &on_error);
-                    reconnect_stream(url, stream, state, on_open, on_message, on_error);
+                    let mut state_lock = state.lock().unwrap();
+                    *state_lock = State::Connecting;
+                    handle_error(error.to_string(),  &on_error);
+                    reconnect_stream(url, stream, Arc::clone(&state), on_open, on_message, on_error);
                 },
                 StreamAction::Close(ref error) => {
-                    handle_error(error.to_string(), &mut state.lock().unwrap(), &on_error);
+                    let mut state_lock = state.lock().unwrap();
+                    *state_lock = State::Closed;
+                    handle_error(error.to_string(), &on_error);
                 },
                 StreamAction::Move(redirect_url) => {
                     let mut state_lock = state.lock().unwrap();
@@ -266,12 +270,11 @@ fn handle_messages(line: String, on_message: &Callback) {
     }
 }
 
-fn handle_error(message: String, state: &mut State, on_error: &Callback) {
+fn handle_error(message: String, on_error: &Callback) {
     let on_error = on_error.lock().unwrap();
     if let Some(ref f) = *on_error {
         f(message);
     }
-    *state = State::Closed;
 }
 
 fn reconnect_stream(
@@ -283,10 +286,6 @@ fn reconnect_stream(
     on_error: Callback
 ) {
     thread::sleep(Duration::from_millis(500));
-
-    let mut state_lock = state.lock().unwrap();
-    *state_lock = State::Connecting;
-
     listen_stream(url.clone(), url, stream, Arc::clone(&state), on_open, on_message, on_error);
 }
 
@@ -405,22 +404,6 @@ mod tests {
         let message = rx.recv().unwrap();
 
         assert!(message.contains("Connection reset by peer"));
-    }
-
-    #[test]
-    fn should_have_state_closed_when_connection_closed_by_server() {
-        let (tx, rx) = mpsc::channel();
-        let (mut event_stream, fake_server) = setup();
-
-        event_stream.on_error(move |message| {
-            tx.send(message).unwrap();
-        });
-
-        fake_server.close();
-
-        let _ = rx.recv().unwrap();
-
-        assert_eq!(event_stream.state(), State::Closed);
     }
 
     #[test]

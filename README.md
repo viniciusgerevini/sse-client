@@ -9,4 +9,5 @@ Client for event streams
   - Handle 204 to stop reconnections
   - Starting reconnection from last sent event
   - Setting retry time
+  - circuit breaker
 
