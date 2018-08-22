@@ -167,6 +167,7 @@ fn event_stream_handshake(url: &Url, last_event_id: &LastIdWrapper) -> Result<Tc
     let host = host.as_str();
 
     let mut stream = TcpStream::connect(host)?;
+    stream.set_read_timeout(Some(Duration::from_millis(60000)))?;
 
     let extra_headers = match *(last_event_id.lock().unwrap()) {
         Some(ref last_id) => format!("Last-Event-ID: {}\r\n", last_id),
