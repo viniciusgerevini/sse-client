@@ -1,3 +1,27 @@
+//! # SSE Client
+//! EventSource implementation to handle streams of Server-Sent Events.
+//! It handles connections, redirections, retries and message parsing.
+//!
+//! To know more about SSE: <a href="https://html.spec.whatwg.org/multipage/server-sent-events.html" target="_new">Standard</a> | <a href="https://developer.mozilla.org/en-US/docs/Web/API/EventSource" target="_new">EventSource interface</a>
+//!
+//! # Example:
+//!
+//! ```no_run
+//! extern crate sse_client;
+//! use sse_client::EventSource;
+//!
+//!
+//! let event_source = EventSource::new("http://event-stream-address/sub").unwrap();
+//!
+//! event_source.on_message(|message| {
+//!     println!("New message event {:?}", message);
+//! });
+//!
+//! event_source.add_event_listener("error", |error| {
+//!     println!("Error {:?}", error);
+//! });
+//!
+//! ```
 extern crate url;
 
 mod network;
@@ -8,16 +32,29 @@ mod test_helper;
 
 use std::sync::{Arc, Mutex};
 use url::{Url, ParseError};
-use network::{EventStream, State};
+use network::EventStream;
 use pub_sub::Bus;
-use data::{EventBuilder, EventBuilderState, Event};
+use data::{EventBuilder, EventBuilderState};
 
+pub use data::Event;
+pub use network::State;
+
+/// Interface to interact with `event-streams`
 pub struct EventSource {
     bus: Arc<Mutex<Bus<Event>>>,
     stream: Arc<Mutex<EventStream>>
 }
 
 impl EventSource {
+    /// Create object and starts connection with event-stream
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # extern crate sse_client;
+    /// # use sse_client::EventSource;
+    /// let event_source = EventSource::new("http://example.com/sub").unwrap();
+    /// ```
     pub fn new(url: &str) -> Result<EventSource, ParseError> {
         let event_stream = Arc::new(Mutex::new(EventStream::new(Url::parse(url)?).unwrap()));
         let stream_for_update = Arc::clone(&event_stream);
@@ -48,23 +85,100 @@ impl EventSource {
         Ok(EventSource{ stream, bus })
     }
 
+    /// Close connection.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # extern crate sse_client;
+    /// # use sse_client::EventSource;
+    /// let event_source = EventSource::new("http://example.com/sub").unwrap();
+    /// event_source.close();
+    /// ```
     pub fn close(&self) {
         self.stream.lock().unwrap().close();
     }
 
+    /// Triggered when connection with stream is stabilished.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # extern crate sse_client;
+    /// # use sse_client::EventSource;
+    /// let event_source = EventSource::new("http://example.com/sub").unwrap();
+    ///
+    /// event_source.on_open(|| {
+    ///     println!("Connection stabilished!");
+    /// });
+    /// ```
     pub fn on_open<F>(&self, listener: F) where F: Fn() + Send + 'static {
         self.add_event_listener("stream_opened", move |_| { listener(); });
     }
 
+    /// Triggered when `message` event is received.
+    /// Any event that doesn't contain an `event` field is considered a `message` event.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # extern crate sse_client;
+    /// # use sse_client::EventSource;
+    /// let event_source = EventSource::new("http://example.com/sub").unwrap();
+    ///
+    /// event_source.on_message(|message| {
+    ///     println!("Message received: {}", message.data);
+    /// });
+    /// ```
     pub fn on_message<F>(&self, listener: F) where F: Fn(Event) + Send + 'static {
         self.add_event_listener("message", listener);
     }
 
+    /// Triggered when event with specified type is received.
+    ///
+    /// Any connection error is notified as event with type `error`.
+    ///
+    /// Events with no type defined have `message` as default type.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # extern crate sse_client;
+    /// # use sse_client::EventSource;
+    /// let event_source = EventSource::new("http://example.com/sub").unwrap();
+    ///
+    ///
+    /// event_source.add_event_listener("myEvent", |event| {
+    ///     println!("Event {} received: {}", event.type_, event.data);
+    /// });
+    ///
+    /// event_source.add_event_listener("error", |error| {
+    ///     println!("Error: {}", error.data);
+    /// });
+    ///
+    /// // equivalent to `on_message`
+    /// event_source.add_event_listener("message", |message| {
+    ///     println!("Message received: {}", message.data);
+    /// });
+    /// ```
     pub fn add_event_listener<F>(&self, event_type: &str, listener: F) where F: Fn(Event) + Send + 'static {
         let mut bus = self.bus.lock().unwrap();
         bus.subscribe(event_type.to_string(), listener);
     }
 
+    /// Returns client [`State`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # extern crate sse_client;
+    /// # use sse_client::EventSource;
+    /// use sse_client::State;
+    /// let event_source = EventSource::new("http://example.com/sub").unwrap();
+    ///
+    /// assert_eq!(event_source.state(), State::Connecting);
+    /// ```
+    /// [`State`]: enum.State.html
     pub fn state(&self) -> State {
         self.stream.lock().unwrap().state()
     }

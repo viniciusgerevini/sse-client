@@ -2,10 +2,14 @@ pub struct EventBuilder {
     pending_event: EventBuilderState
 }
 
+/// Event data sent by server
 #[derive(Debug, PartialEq, Clone)]
 pub struct Event {
+    /// Represents message `id` field. Default "".
     pub id: String,
+    /// Represents message `event` field. Default "message".
     pub type_: String,
+    /// Represents message `data` field. Default "".
     pub data: String
 }
 

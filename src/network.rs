@@ -16,10 +16,14 @@ type LastIdWrapper = Arc<Mutex<Option<String>>>;
 
 const INITIAL_RECONNECTION_TIME_IN_MS: u64 = 500;
 
+/// Client state
 #[derive(Debug, PartialEq, Clone)]
 pub enum State {
+    /// State when trying to connect or reconnect to stream.
     Connecting,
+    /// Stream is open.
     Open,
+    /// State when connection is closed and client won't try to reconnect.
     Closed
 }
 
