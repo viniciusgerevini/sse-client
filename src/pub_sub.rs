@@ -105,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn should_not_break_when_publish_to_event_with_no_subscribers() {
+    fn should_not_break_when_published_event_with_no_subscribers() {
         let bus: Bus<String> = Bus::new();
         bus.publish("event".to_string(), "data".to_string());
     }

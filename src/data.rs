@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn should_be_empty_when_no_data_received() {
+    fn should_be_empty_when_only_comments_received() {
         let mut e = EventBuilder::new();
 
         e.update(":hi");
