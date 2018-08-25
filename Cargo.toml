@@ -6,7 +6,7 @@ readme = "README.md"
 license = "MIT"
 repository = "https://github.com/viniciusgerevini/sse-client"
 description = "Client for streams of Server-Sent Events"
-keywords = ["sse", "server-sent events", "event-source"]
+keywords = ["sse", "server-sent", "events", "event-source"]
 
 [dependencies]
 url = "1.7.0"
