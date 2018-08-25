@@ -2,6 +2,11 @@
 name = "sse-client"
 version = "0.1.0"
 authors = ["Vinicius Gerevini <viniciusgerevini@gmail.com>"]
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/viniciusgerevini/sse-client"
+description = "Client for streams of Server-Sent Events"
+keywords = ["sse", "server-sent events", "event-source"]
 
 [dependencies]
 url = "1.7.0"
