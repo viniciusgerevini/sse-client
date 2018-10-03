@@ -26,3 +26,16 @@ event_source.add_event_listener("error", |error| {
 
 ```
 
+In case you prefer a blocking api:
+
+```rust
+extern crate sse_client;
+use sse_client::EventSource;
+
+let event_source = EventSource::new("http://event-stream-address/sub").unwrap();
+
+for event in event_source.receiver().iter() {
+    println!("New Message: {}", event.data);
+}
+```
+
