@@ -197,7 +197,7 @@ fn get_host(url: &Url) -> String {
         None => String::from("localhost")
     };
 
-    if let Some(port) = url.port() {
+    if let Some(port) = url.port_or_known_default() {
         host = format!("{}:{}", host, port);
     }
 
@@ -906,6 +906,22 @@ mod tests {
 
         event_stream.close();
         fake_server.close();
+    }
+
+    #[test]
+    fn should_use_port_80_as_default_when_no_port_provided() {
+        let url = Url::parse("http://localhost").unwrap();
+        let host = get_host(&url);
+
+        assert_eq!(host, String::from("localhost:80"));
+    }
+
+    #[test]
+    fn should_use_port_443_as_default_when_https_and_no_port_provided() {
+        let url = Url::parse("https://localhost").unwrap();
+        let host = get_host(&url);
+
+        assert_eq!(host, String::from("localhost:443"));
     }
 }
 
