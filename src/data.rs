@@ -34,7 +34,7 @@ impl EventBuilder {
     pub fn update(&mut self, message: &str) -> EventBuilderState {
         if message == "" {
             self.finalize_event();
-        } else if !message.starts_with(":") {
+        } else if !message.starts_with(":") && message.contains(":") {
             self.pending_event = self.update_event(message);
         }
 
@@ -248,5 +248,21 @@ mod tests {
         e.update("");
 
         assert_eq!(e.get_event(), EventBuilderState::Empty);
+    }
+
+    #[test]
+    fn should_ignore_messages_without_colon() {
+        let expected_event = Event::new("some_event", "test");
+        let mut e = EventBuilder::new();
+
+        e.update("event: some_event");
+        e.update("this is a random message that should be ignored");
+        e.update("data: test");
+
+        if let EventBuilderState::Pending(event) = e.get_event() {
+            assert_eq!(event, expected_event);
+        } else {
+            panic!("event should be pending");
+        }
     }
 }
