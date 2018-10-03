@@ -30,7 +30,7 @@ mod data;
 #[cfg(test)]
 mod test_helper;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc };
 use url::{Url, ParseError};
 use network::EventStream;
 use pub_sub::Bus;
@@ -38,6 +38,7 @@ use data::{EventBuilder, EventBuilderState};
 
 pub use data::Event;
 pub use network::State;
+
 
 /// Interface to interact with `event-streams`
 pub struct EventSource {
@@ -181,6 +182,21 @@ impl EventSource {
     /// [`State`]: enum.State.html
     pub fn state(&self) -> State {
         self.stream.lock().unwrap().state()
+    }
+
+    pub fn receiver(&self) -> mpsc::Receiver<Event> {
+        let (tx, rx) = mpsc::channel();
+        let error_tx = tx.clone();
+
+        self.on_message(move |event| {
+            tx.send(event).unwrap();
+        });
+
+        self.add_event_listener("error", move |error| {
+            error_tx.send(error).unwrap();
+        });
+
+        rx
     }
 }
 
@@ -466,6 +482,34 @@ mod tests {
         } else {
             panic!("should contain last id in header");
         }
+
+        event_source.close();
+        fake_server.close();
+    }
+
+    #[test]
+    fn should_expose_blocking_api() {
+        let (event_source, fake_server) = setup();
+        let rx = event_source.receiver();
+
+        fake_server.send("\ndata: some message\n\n");
+        fake_server.send("\ndata: some message 2\n\n");
+
+        assert_eq!(rx.recv().unwrap().data, "some message");
+        assert_eq!(rx.recv().unwrap().data, "some message 2");
+
+        event_source.close();
+        fake_server.close();
+    }
+
+    #[test]
+    fn receiver_should_get_error_events() {
+        let (event_source, fake_server) = setup();
+        let rx = event_source.receiver();
+
+        fake_server.send("HTTP/1.1 500 Internal Server Error\n");
+
+        assert_eq!(rx.recv().unwrap().type_, "error");
 
         event_source.close();
         fake_server.close();
