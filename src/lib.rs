@@ -184,6 +184,30 @@ impl EventSource {
         self.stream.lock().unwrap().state()
     }
 
+    /// Returns a receiver that is triggered on any new message or error.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # extern crate sse_client;
+    /// # use sse_client::EventSource;
+    /// let event_source = EventSource::new("http://example.com/sub").unwrap();
+    ///
+    /// for event in event_source.receiver().iter() {
+    ///     println!("New Message: {}", event.data);
+    /// }
+    ///
+    /// ```
+    /// ```no_run
+    /// # extern crate sse_client;
+    /// # use sse_client::EventSource;
+    /// let event_source = EventSource::new("http://example.com/sub").unwrap();
+    /// let rx = event_source.receiver();
+    ///
+    /// let event = rx.recv().unwrap();
+    /// //...
+    ///
+    /// ```
     pub fn receiver(&self) -> mpsc::Receiver<Event> {
         let (tx, rx) = mpsc::channel();
         let error_tx = tx.clone();
