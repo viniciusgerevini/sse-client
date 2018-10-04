@@ -9,6 +9,8 @@ To know more about SSE: [Standard](https://html.spec.whatwg.org/multipage/server
 
 # Example:
 
+Usage:
+
 ```rust
 extern crate sse_client;
 use sse_client::EventSource;
@@ -26,7 +28,7 @@ event_source.add_event_listener("error", |error| {
 
 ```
 
-In case you prefer a blocking api:
+Or:
 
 ```rust
 extern crate sse_client;
