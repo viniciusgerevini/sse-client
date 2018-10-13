@@ -44,8 +44,6 @@ extern crate http_test_server;
 mod network;
 mod pub_sub;
 mod data;
-#[cfg(test)]
-mod test_helper;
 
 use std::sync::{Arc, Mutex, mpsc };
 use url::{Url, ParseError};
@@ -270,20 +268,23 @@ mod tests {
     use std::time::Duration;
     use std::sync::mpsc;
     use http_test_server::{ TestServer, Resource };
+    use http_test_server::http::Status;
 
-    fn setup() -> (EventSource, TestServer, Resource) {
+    fn setup() -> (TestServer, Resource, String) {
         let server = TestServer::new().unwrap();
         let resource = server.create_resource("/sub");
         resource.header("Content-Type", "text/event-stream").stream();
         let address = format!("http://localhost:{}/sub", server.port());
-        let event_source = EventSource::new(address.as_str()).unwrap();
         thread::sleep(Duration::from_millis(100));
-        (event_source, server, resource)
+        (server, resource, address)
     }
+
 
     #[test]
     fn should_create_client() {
-        let (event_source, _server, _resource) = setup();
+        let (_server, _stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
+
         event_source.close();
     }
 
@@ -298,11 +299,14 @@ mod tests {
     #[test]
     fn accept_closure_as_listeners() {
         let (tx, rx) = mpsc::channel();
-        let (event_source, _server, stream_endpoint) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
         });
+
+        while event_source.state() == State::Connecting {}
 
         stream_endpoint
             .send_line("data: some message").send_line("");
@@ -317,7 +321,8 @@ mod tests {
     fn should_trigger_listeners_when_message_received() {
         let (tx, rx) = mpsc::channel();
         let tx2 = tx.clone();
-        let (event_source, _server, stream_endpoint) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
@@ -326,6 +331,8 @@ mod tests {
         event_source.on_message(move |message| {
             tx2.send(message.data).unwrap();
         });
+
+        while event_source.state() == State::Connecting {}
 
         stream_endpoint.send_line("data: some message").send_line("");
 
@@ -342,11 +349,14 @@ mod tests {
     fn should_not_trigger_listeners_for_comments() {
         let (tx, rx) = mpsc::channel();
 
-        let (event_source, _server, stream_endpoint) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
         });
+
+        while event_source.state() != State::Open {};
 
         stream_endpoint
             .send_line("data: message")
@@ -369,11 +379,14 @@ mod tests {
     fn ignore_empty_messages() {
         let (tx, rx) = mpsc::channel();
 
-        let (event_source, _server, stream_endpoint) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
         });
+
+        while event_source.state() != State::Open {};
 
         stream_endpoint
             .send_line("data: message")
@@ -394,11 +407,14 @@ mod tests {
     #[test]
     fn event_trigger_its_defined_listener() {
         let (tx, rx) = mpsc::channel();
-        let (event_source, _server, stream_endpoint) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.add_event_listener("myEvent", move |event| {
             tx.send(event).unwrap();
         });
+
+        while event_source.state() == State::Connecting {}
 
         stream_endpoint
             .send_line("event: myEvent")
@@ -415,14 +431,14 @@ mod tests {
     #[test]
     fn dont_trigger_on_message_for_event() {
         let (tx, rx) = mpsc::channel();
-        let (event_source, _server, stream_endpoint) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_message(move |_| {
             tx.send("NOOOOOOOOOOOOOOOOOOO!").unwrap();
         });
 
         stream_endpoint
-            .send("\n")
             .send("event: myEvent\n")
             .send("data: my message\n\n");
 
@@ -436,11 +452,14 @@ mod tests {
     fn should_close_connection() {
         let (tx, rx) = mpsc::channel();
 
-        let (event_source, _server, stream_endpoint) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
          event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
         });
+
+        while event_source.state() != State::Open {};
 
         stream_endpoint.send("\ndata: some message\n\n");
         rx.recv().unwrap();
@@ -454,15 +473,14 @@ mod tests {
     #[test]
     fn should_trigger_on_open_callback_when_connected() {
         let (tx, rx) = mpsc::channel();
-        let (event_source, _server, stream_endpoint) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint.delay(Duration::from_millis(200));
+
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_open(move || {
             tx.send("open").unwrap();
         });
-
-        stream_endpoint.send("HTTP/1.1 200 OK\n");
-        stream_endpoint.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
-        stream_endpoint.send("\n");
 
         rx.recv().unwrap();
 
@@ -471,20 +489,17 @@ mod tests {
 
     #[test]
     fn should_return_stream_connection_status() {
-        let server = TestServer::new().unwrap();
-        let stream_endpoint = server.create_resource("/sub");
+        let (_server, stream_endpoint, address) = setup();
         stream_endpoint
-            .header("Content-Type", "text/event-stream")
-            .delay(Duration::from_millis(100))
+            .delay(Duration::from_millis(200))
             .stream();
 
-        let address = format!("http://localhost:{}/sub", server.port());
-        let event_source = EventSource::new(address.as_str()).unwrap();
+        let event_source = EventSource::new(&address).unwrap();
         thread::sleep(Duration::from_millis(100));
 
         assert_eq!(event_source.state(), State::Connecting);
 
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(200));
 
         assert_eq!(event_source.state(), State::Open);
 
@@ -492,13 +507,14 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         assert_eq!(event_source.state(), State::Closed);
-
     }
 
 
     #[test]
     fn should_send_last_event_id_on_reconnection() {
-        let (event_source, server, stream_endpoint) = setup();
+        let (server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
+        thread::sleep(Duration::from_millis(100));
 
         stream_endpoint.send("id: helpMe\n");
         stream_endpoint.send("data: my message\n\n");
@@ -516,11 +532,13 @@ mod tests {
 
     #[test]
     fn should_expose_blocking_api() {
-        let (event_source, _server, stream_endpoint) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
+        thread::sleep(Duration::from_millis(100));
         let rx = event_source.receiver();
 
-        stream_endpoint.send("\ndata: some message\n\n");
-        stream_endpoint.send("\ndata: some message 2\n\n");
+        stream_endpoint.send("data: some message\n\n");
+        stream_endpoint.send("data: some message 2\n\n");
 
         assert_eq!(rx.recv().unwrap().data, "some message");
         assert_eq!(rx.recv().unwrap().data, "some message 2");
@@ -530,10 +548,13 @@ mod tests {
 
     #[test]
     fn receiver_should_get_error_events() {
-        let (event_source, _server, stream_endpoint) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint
+            .delay(Duration::from_millis(100))
+            .status(Status::InternalServerError);
+        let event_source = EventSource::new(&address).unwrap();
+        thread::sleep(Duration::from_millis(100));
         let rx = event_source.receiver();
-
-        stream_endpoint.send("HTTP/1.1 500 Internal Server Error\n");
 
         assert_eq!(rx.recv().unwrap().type_, "error");
 
