@@ -306,7 +306,9 @@ mod tests {
             tx.send(message.data).unwrap();
         });
 
-        while event_source.state() == State::Connecting {}
+        while event_source.state() == State::Connecting {
+            thread::sleep(Duration::from_millis(100));
+        }
 
         stream_endpoint
             .send_line("data: some message").send_line("");
@@ -332,7 +334,9 @@ mod tests {
             tx2.send(message.data).unwrap();
         });
 
-        while event_source.state() == State::Connecting {}
+        while event_source.state() == State::Connecting {
+            thread::sleep(Duration::from_millis(100));
+        }
 
         stream_endpoint.send_line("data: some message").send_line("");
 
@@ -356,7 +360,9 @@ mod tests {
             tx.send(message.data).unwrap();
         });
 
-        while event_source.state() != State::Open {};
+        while event_source.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        };
 
         stream_endpoint
             .send_line("data: message")
@@ -386,7 +392,9 @@ mod tests {
             tx.send(message.data).unwrap();
         });
 
-        while event_source.state() != State::Open {};
+        while event_source.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        };
 
         stream_endpoint
             .send_line("data: message")
@@ -414,7 +422,9 @@ mod tests {
             tx.send(event).unwrap();
         });
 
-        while event_source.state() == State::Connecting {}
+        while event_source.state() == State::Connecting {
+            thread::sleep(Duration::from_millis(100));
+        }
 
         stream_endpoint
             .send_line("event: myEvent")
@@ -459,7 +469,9 @@ mod tests {
             tx.send(message.data).unwrap();
         });
 
-        while event_source.state() != State::Open {};
+        while event_source.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        };
 
         stream_endpoint.send("\ndata: some message\n\n");
         rx.recv().unwrap();
@@ -553,7 +565,6 @@ mod tests {
             .delay(Duration::from_millis(100))
             .status(Status::InternalServerError);
         let event_source = EventSource::new(&address).unwrap();
-        thread::sleep(Duration::from_millis(100));
         let rx = event_source.receiver();
 
         assert_eq!(rx.recv().unwrap().type_, "error");

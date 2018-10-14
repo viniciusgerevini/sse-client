@@ -417,7 +417,9 @@ mod tests {
             tx.send(message).unwrap();
         });
 
-        while event_stream.state() == State::Connecting {}
+        while event_stream.state() != State::Open {
+            thread::sleep(Duration::from_millis(200));
+        }
 
         stream_endpoint.send("data: some message\n\n");
 
@@ -435,11 +437,12 @@ mod tests {
         let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_error(move |message| {
-            println!("{}", message);
             tx.send(message).unwrap();
         });
 
-        while event_stream.state() == State::Connecting {};
+        while event_stream.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        };
 
         stream_endpoint.close_open_connections();
 
@@ -469,7 +472,7 @@ mod tests {
     #[test]
     fn should_reconnect_when_connection_closed_by_server() {
         let (tx, rx) = mpsc::channel();
-        let (server, stream_endpoint, address) = setup();
+        let (_server, stream_endpoint, address) = setup();
         let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_message(move |message| {
@@ -478,36 +481,13 @@ mod tests {
 
         stream_endpoint.close_open_connections();
 
-        server.requests().recv().unwrap();
+        while event_stream.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        }
 
         stream_endpoint.send("data: some message\n\n");
 
         assert_eq!(rx.recv().unwrap(), "data: some message");
-
-        event_stream.close();
-    }
-
-    #[test]
-    fn should_reconnect_when_first_connection_fails() {
-        let url = Url::parse("http://localhost:7763/sub").unwrap();
-        let mut event_stream = EventStream::new(url).unwrap();
-
-        let (tx, rx) = mpsc::channel();
-
-        event_stream.on_message(move |message| {
-            tx.send(message).unwrap();
-        });
-
-        let server = TestServer::new_with_port(7763).unwrap();
-        let stream_endpoint = server.create_resource("/sub");
-        stream_endpoint.header("Content-Type", "text/event-stream").stream();
-
-        while event_stream.state() != State::Open {}
-
-        stream_endpoint.send_line("data: some message");
-
-        let message = rx.recv().unwrap();
-        assert_eq!(message, "data: some message");
 
         event_stream.close();
     }
@@ -630,7 +610,9 @@ mod tests {
         stream_endpoint.status(Status::OK);
         stream_endpoint2.close_open_connections();
 
-        while event_stream.state() != State::Open {}
+        while event_stream.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        }
 
         stream_endpoint.send("data: from server 1\n\n");
         let message = rx.recv().unwrap();
@@ -659,8 +641,12 @@ mod tests {
             .delay(Duration::from_millis(200))
             .close_open_connections();
 
-        while event_stream.state() != State::Connecting {}
-        while event_stream.state() != State::Open {}
+        while event_stream.state() != State::Connecting {
+            thread::sleep(Duration::from_millis(100));
+        }
+        while event_stream.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        }
 
         stream_endpoint2.send("data: from server 2\n");
         assert_eq!(rx.recv().unwrap(), "data: from server 2");
