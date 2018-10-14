@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn should_reconnect_when_connection_closed_by_server() {
         let (tx, rx) = mpsc::channel();
-        let (server, stream_endpoint, address) = setup();
+        let (_server, stream_endpoint, address) = setup();
         let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_message(move |message| {
@@ -480,8 +480,6 @@ mod tests {
         });
 
         stream_endpoint.close_open_connections();
-
-        server.requests().recv().unwrap();
 
         while event_stream.state() != State::Open {
             thread::sleep(Duration::from_millis(100));
