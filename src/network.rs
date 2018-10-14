@@ -417,7 +417,9 @@ mod tests {
             tx.send(message).unwrap();
         });
 
-        while event_stream.state() == State::Connecting {}
+        while event_stream.state() != State::Open {
+            thread::sleep(Duration::from_millis(200));
+        }
 
         stream_endpoint.send("data: some message\n\n");
 
