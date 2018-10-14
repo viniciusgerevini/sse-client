@@ -38,11 +38,12 @@
 //! ```
 extern crate url;
 
+#[cfg(test)]
+extern crate http_test_server;
+
 mod network;
 mod pub_sub;
 mod data;
-#[cfg(test)]
-mod test_helper;
 
 use std::sync::{Arc, Mutex, mpsc };
 use url::{Url, ParseError};
@@ -266,22 +267,25 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     use std::sync::mpsc;
+    use http_test_server::{ TestServer, Resource };
+    use http_test_server::http::Status;
 
-    use test_helper::fake_server;
-
-    fn setup() -> (EventSource, fake_server::FakeServer) {
-        let fake_server = fake_server::FakeServer::new();
-        let address = format!("http://{}/sub", fake_server.socket_address());
-        let event_source = EventSource::new(address.as_str()).unwrap();
+    fn setup() -> (TestServer, Resource, String) {
+        let server = TestServer::new().unwrap();
+        let resource = server.create_resource("/sub");
+        resource.header("Content-Type", "text/event-stream").stream();
+        let address = format!("http://localhost:{}/sub", server.port());
         thread::sleep(Duration::from_millis(100));
-        (event_source, fake_server)
+        (server, resource, address)
     }
+
 
     #[test]
     fn should_create_client() {
-        let (event_source, fake_server) = setup();
+        let (_server, _stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
+
         event_source.close();
-        fake_server.close();
     }
 
     #[test]
@@ -295,26 +299,30 @@ mod tests {
     #[test]
     fn accept_closure_as_listeners() {
         let (tx, rx) = mpsc::channel();
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
         });
 
-        fake_server.send("\ndata: some message\n\n");
+        while event_source.state() == State::Connecting {}
+
+        stream_endpoint
+            .send_line("data: some message").send_line("");
 
         let message = rx.recv().unwrap();
         assert_eq!(message, "some message");
 
         event_source.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_trigger_listeners_when_message_received() {
         let (tx, rx) = mpsc::channel();
         let tx2 = tx.clone();
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
@@ -324,7 +332,9 @@ mod tests {
             tx2.send(message.data).unwrap();
         });
 
-        fake_server.send("\ndata: some message\n\n");
+        while event_source.state() == State::Connecting {}
+
+        stream_endpoint.send_line("data: some message").send_line("");
 
         let message = rx.recv().unwrap();
         let message2 = rx.recv().unwrap();
@@ -333,24 +343,28 @@ mod tests {
         assert_eq!(message2, "some message");
 
         event_source.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_not_trigger_listeners_for_comments() {
         let (tx, rx) = mpsc::channel();
 
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
         });
 
-        fake_server.send("\n");
-        fake_server.send("data: message\n\n");
-        fake_server.send(":this is a comment\n");
-        fake_server.send(":this is another comment\n");
-        fake_server.send("data: this is a message\n\n");
+        while event_source.state() != State::Open {};
+
+        stream_endpoint
+            .send_line("data: message")
+            .send_line("")
+            .send_line(":this is a comment")
+            .send_line(":this is another comment")
+            .send_line("data: this is a message")
+            .send_line("");
 
         let message = rx.recv().unwrap();
         let message2 = rx.recv().unwrap();
@@ -359,24 +373,27 @@ mod tests {
         assert_eq!(message2, "this is a message");
 
         event_source.close();
-        fake_server.close();
     }
 
     #[test]
     fn ignore_empty_messages() {
         let (tx, rx) = mpsc::channel();
 
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
         });
 
-        fake_server.send("\n");
-        fake_server.send("data: message\n");
-        fake_server.send("\n");
-        fake_server.send("\n");
-        fake_server.send("data: this is a message\n\n");
+        while event_source.state() != State::Open {};
+
+        stream_endpoint
+            .send_line("data: message")
+            .send_line("")
+            .send_line("")
+            .send_line("data: this is a message")
+            .send_line("");
 
         let message = rx.recv().unwrap();
         let message2 = rx.recv().unwrap();
@@ -385,22 +402,23 @@ mod tests {
         assert_eq!(message2, "this is a message");
 
         event_source.close();
-        fake_server.close();
     }
 
     #[test]
     fn event_trigger_its_defined_listener() {
         let (tx, rx) = mpsc::channel();
-
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.add_event_listener("myEvent", move |event| {
             tx.send(event).unwrap();
         });
 
-        fake_server.send("\n");
-        fake_server.send("event: myEvent\n");
-        fake_server.send("data: my message\n\n");
+        while event_source.state() == State::Connecting {}
+
+        stream_endpoint
+            .send_line("event: myEvent")
+            .send_line("data: my message\n");
 
         let message = rx.recv().unwrap();
 
@@ -408,76 +426,79 @@ mod tests {
         assert_eq!(message.data, String::from("my message"));
 
         event_source.close();
-        fake_server.close();
     }
 
     #[test]
     fn dont_trigger_on_message_for_event() {
         let (tx, rx) = mpsc::channel();
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_message(move |_| {
             tx.send("NOOOOOOOOOOOOOOOOOOO!").unwrap();
         });
 
-        fake_server.send("\n");
-        fake_server.send("event: myEvent\n");
-        fake_server.send("data: my message\n\n");
+        stream_endpoint
+            .send("event: myEvent\n")
+            .send("data: my message\n\n");
 
         thread::sleep(Duration::from_millis(500));
         assert!(rx.try_recv().is_err());
 
         event_source.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_close_connection() {
         let (tx, rx) = mpsc::channel();
 
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
 
          event_source.on_message(move |message| {
             tx.send(message.data).unwrap();
         });
 
-        fake_server.send("\ndata: some message\n\n");
+        while event_source.state() != State::Open {};
+
+        stream_endpoint.send("\ndata: some message\n\n");
         rx.recv().unwrap();
         event_source.close();
-        fake_server.send("\ndata: some message\n\n");
+        stream_endpoint.send("\ndata: some message\n\n");
 
         thread::sleep(Duration::from_millis(400));
         assert!(rx.try_recv().is_err());
-
-        fake_server.close();
     }
 
     #[test]
     fn should_trigger_on_open_callback_when_connected() {
         let (tx, rx) = mpsc::channel();
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint.delay(Duration::from_millis(200));
+
+        let event_source = EventSource::new(&address).unwrap();
 
         event_source.on_open(move || {
             tx.send("open").unwrap();
         });
 
-        fake_server.send("HTTP/1.1 200 OK\n");
-        fake_server.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
-        fake_server.send("\n");
-
         rx.recv().unwrap();
 
         event_source.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_return_stream_connection_status() {
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint
+            .delay(Duration::from_millis(200))
+            .stream();
+
+        let event_source = EventSource::new(&address).unwrap();
+        thread::sleep(Duration::from_millis(100));
 
         assert_eq!(event_source.state(), State::Connecting);
 
-        fake_server.send("\n");
         thread::sleep(Duration::from_millis(200));
 
         assert_eq!(event_source.state(), State::Open);
@@ -486,70 +507,57 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         assert_eq!(event_source.state(), State::Closed);
-
-        fake_server.close();
     }
 
 
     #[test]
-    fn should_send_last_event_id_on_reconnection_2() {
-        let (event_source, mut fake_server) = setup();
-        let expected_header = Arc::new(Mutex::new(None));
+    fn should_send_last_event_id_on_reconnection() {
+        let (server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
+        thread::sleep(Duration::from_millis(100));
 
-        let header = Arc::clone(&expected_header);
-        fake_server.on_client_message(move |message| {
-            if message.starts_with("Last-Event-ID") {
-                let mut header = header.lock().unwrap();
-                *header = Some(message);
-            }
-        });
-
-        fake_server.send("HTTP/1.1 200 OK\n");
-        fake_server.send("\n");
-        fake_server.send("id: helpMe\n");
-        fake_server.send("data: my message\n\n");
+        stream_endpoint.send("id: helpMe\n");
+        stream_endpoint.send("data: my message\n\n");
 
         thread::sleep(Duration::from_millis(500));
-        fake_server.break_current_connection();
-        thread::sleep(Duration::from_millis(800));
 
-        let expected_header = expected_header.lock().unwrap();
+        stream_endpoint.close_open_connections();
 
-        if let Some(ref header) = *expected_header {
-            assert_eq!(header, "Last-Event-ID: helpMe");
-        } else {
-            panic!("should contain last id in header");
-        }
+        let request = server.requests().recv().unwrap();
+
+        assert_eq!(request.headers.get("Last-Event-ID").unwrap(), "helpMe");
 
         event_source.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_expose_blocking_api() {
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
+        thread::sleep(Duration::from_millis(100));
         let rx = event_source.receiver();
 
-        fake_server.send("\ndata: some message\n\n");
-        fake_server.send("\ndata: some message 2\n\n");
+        stream_endpoint.send("data: some message\n\n");
+        stream_endpoint.send("data: some message 2\n\n");
 
         assert_eq!(rx.recv().unwrap().data, "some message");
         assert_eq!(rx.recv().unwrap().data, "some message 2");
 
         event_source.close();
-        fake_server.close();
     }
 
     #[test]
     fn receiver_should_get_error_events() {
-        let (event_source, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint
+            .delay(Duration::from_millis(100))
+            .status(Status::InternalServerError);
+        let event_source = EventSource::new(&address).unwrap();
+        thread::sleep(Duration::from_millis(100));
         let rx = event_source.receiver();
-
-        fake_server.send("HTTP/1.1 500 Internal Server Error\n");
 
         assert_eq!(rx.recv().unwrap().type_, "error");
 
         event_source.close();
-        fake_server.close();
     }
 }

@@ -211,8 +211,12 @@ fn read_stream(
     on_message: &Callback,
     failed_attempts: &Arc<Mutex<u32>>
 ) -> Result<(), StreamAction> {
-    let reader = BufReader::new(connection_stream);
-    let mut previous_line = String::from("nothing");
+    let mut reader = BufReader::new(connection_stream);
+
+    let mut request_header = String::new();
+    reader.read_line(&mut request_header).unwrap();
+
+    let status_code = validate_status_code(request_header)?;
 
     for line in reader.lines() {
         let mut state = state.lock().unwrap();
@@ -222,10 +226,9 @@ fn read_stream(
         })?;
 
         match *state {
-            State::Connecting => handle_headers(line.clone(), &mut state, &on_open, &previous_line, failed_attempts)?,
+            State::Connecting => handle_headers(line.clone(), &mut state, &on_open, status_code, failed_attempts)?,
             _ => handle_messages(line.clone(), &on_message)
         }
-        previous_line = line;
     }
 
     match *(state.lock().unwrap()) {
@@ -238,17 +241,15 @@ fn handle_headers(
     line: String,
     state: &mut State,
     on_open: &CallbackNoArgs,
-    previous_line: &str,
+    status_code: i32,
     failed_attempts: &Arc<Mutex<u32>>
 ) -> Result<(), StreamAction> {
     if line == "" {
         handle_open_connection(state, on_open, failed_attempts)
     } else if line.starts_with("Content-Type") {
         validate_content_type(line)
-    } else if line.starts_with("HTTP/1.1 ") {
-        validate_status_code(line)
     } else if line.starts_with("Location:") {
-        handle_new_location(line, previous_line)
+        handle_new_location(line, status_code)
     } else {
         Ok(())
     }
@@ -273,25 +274,24 @@ fn validate_content_type(line: String) -> Result<(), StreamAction> {
     }
 }
 
-fn validate_status_code(line: String) -> Result<(), StreamAction> {
-    let status = &line[9..];
+fn validate_status_code(line: String) -> Result<(i32), StreamAction> {
+    let status = &line[9..].trim_right();
     let status_code: i32 = status[..3].parse().unwrap();
 
     match status_code {
-        200 | 301 | 302 | 303 | 307 => Ok(()),
+        200 | 301 | 302 | 303 | 307 => Ok(status_code),
         204 => Err(StreamAction::Close(status.to_string())),
         200 ... 299 => Err(StreamAction::Reconnect(status.to_string())),
         _ => Err(StreamAction::Close(status.to_string()))
     }
 }
 
-fn handle_new_location(line: String, previous_line: &str) -> Result<(), StreamAction> {
-    let status_code = &previous_line[9..12];
+fn handle_new_location(line: String, status_code: i32) -> Result<(), StreamAction> {
     let location = &line[10..];
 
     match status_code {
-        "301" => Err(StreamAction::MovePermanently(Url::parse(location).unwrap())),
-        "302" | "303" | "307" => Err(StreamAction::Move(Url::parse(location).unwrap())),
+        301 => Err(StreamAction::MovePermanently(Url::parse(location).unwrap())),
+        302 | 303 | 307 => Err(StreamAction::Move(Url::parse(location).unwrap())),
         _ => Ok(())
     }
 }
@@ -333,162 +333,158 @@ fn reconnect_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::test_helper::fake_server::FakeServer;
     use std::sync::mpsc;
     use std::time::Duration;
+    use http_test_server::{ TestServer, Resource };
+    use http_test_server::http::Status;
 
-    fn setup() -> (EventStream, FakeServer) {
-        let fake_server = FakeServer::new();
-        let address = format!("http://{}/sub", fake_server.socket_address());
+    fn setup() -> (TestServer, Resource, Url) {
+        let server = TestServer::new().unwrap();
+        let resource = server.create_resource("/sub");
+        resource.header("Content-Type", "text/event-stream").stream();
+        let address = format!("http://localhost:{}/sub", server.port());
         let url = Url::parse(address.as_str()).unwrap();
-        let event_stream = EventStream::new(url).unwrap();
-
-        thread::sleep(Duration::from_millis(100));
-
-        (event_stream, fake_server)
+        (server, resource, url)
     }
+
 
     #[test]
     fn should_create_stream_object() {
-        let (event_stream, fake_server) = setup();
+        let (_server, _stream_endpoint, address) = setup();
+        let event_stream = EventStream::new(address).unwrap();
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_trigger_on_open_listener() {
         let (tx, rx) = mpsc::channel();
-        let (mut event_stream, fake_server) = setup();
+
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
+
+        let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_open(move || {
             tx.send("open").unwrap();
         });
 
-        fake_server.send("HTTP/1.1 200 OK\n");
-        fake_server.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
-        fake_server.send("\n");
-
         let _ = rx.recv().unwrap();
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_have_status_connecting_while_opening_connection() {
-        let (event_stream, fake_server) = setup();
+        let (_server, _stream_endpoint, address) = setup();
+        let event_stream = EventStream::new(address).unwrap();
 
         let state = event_stream.state();
         assert_eq!(state, State::Connecting);
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_have_status_open_after_connection_stabilished() {
-        let (event_stream, fake_server) = setup();
+        let (_server, _stream_endpoint, address) = setup();
+        let event_stream = EventStream::new(address).unwrap();
 
-        fake_server.send("\n");
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(100));
         let state = event_stream.state();
         assert_eq!(state, State::Open);
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_have_status_closed_after_closing_connection() {
-        let (event_stream, fake_server) = setup();
+        let (_server, _stream_endpoint, address) = setup();
+        let event_stream = EventStream::new(address).unwrap();
 
         event_stream.close();
-        thread::sleep(Duration::from_millis(200));
 
         let state = event_stream.state();
         assert_eq!(state, State::Closed);
-
-        fake_server.close();
     }
 
     #[test]
     fn should_trigger_listeners_when_message_received() {
         let (tx, rx) = mpsc::channel();
-        let (mut event_stream, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_message(move |message| {
             tx.send(message).unwrap();
         });
 
-        fake_server.send("\ndata: some message\n\n");
+        while event_stream.state() == State::Connecting {}
+
+        stream_endpoint.send("data: some message\n\n");
 
         let message = rx.recv().unwrap();
 
         assert_eq!(message, "data: some message");
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_trigger_on_error_when_connection_closed_by_server() {
         let (tx, rx) = mpsc::channel();
-        let (mut event_stream, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_error(move |message| {
+            println!("{}", message);
             tx.send(message).unwrap();
         });
 
-        fake_server.close();
+        while event_stream.state() == State::Connecting {};
+
+        stream_endpoint.close_open_connections();
 
         let message = rx.recv().unwrap();
 
-        assert!(message.contains("Connection reset by peer"));
+        assert!(message.contains("connection closed by server"));
     }
 
     #[test]
     fn should_trigger_error_when_status_code_is_not_success() {
         let (tx, rx) = mpsc::channel();
-        let (mut event_stream, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint.status(Status::InternalServerError);
+        let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_error(move |message| {
             tx.send(message).unwrap();
         });
-
-        fake_server.send("HTTP/1.1 500 Internal Server Error\n");
-        fake_server.send("Date: Thu, 24 May 2018 12:26:38 GMT\n");
-        fake_server.send("\n");
 
         let message = rx.recv().unwrap();
 
         assert_eq!(message, "500 Internal Server Error");
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_reconnect_when_connection_closed_by_server() {
         let (tx, rx) = mpsc::channel();
-        let (mut event_stream, fake_server) = setup();
+        let (server, stream_endpoint, address) = setup();
+        let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_message(move |message| {
             tx.send(message).unwrap();
         });
 
-        fake_server.break_current_connection();
+        stream_endpoint.close_open_connections();
 
-        loop {
-            thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
-            fake_server.send("\ndata: some message\n\n");
-            if let Ok(message) = rx.try_recv() {
-                assert_eq!(message, "data: some message");
-                break;
-            }
-        }
+        server.requests().recv().unwrap();
+
+        stream_endpoint.send("data: some message\n\n");
+
+        assert_eq!(rx.recv().unwrap(), "data: some message");
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
@@ -496,26 +492,24 @@ mod tests {
         let url = Url::parse("http://localhost:7763/sub").unwrap();
         let mut event_stream = EventStream::new(url).unwrap();
 
-
         let (tx, rx) = mpsc::channel();
 
         event_stream.on_message(move |message| {
             tx.send(message).unwrap();
         });
 
-        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
+        let server = TestServer::new_with_port(7763).unwrap();
+        let stream_endpoint = server.create_resource("/sub");
+        stream_endpoint.header("Content-Type", "text/event-stream").stream();
 
-        let fake_server = FakeServer::create("localhost:7763");
-        thread::sleep(Duration::from_millis(100));
+        while event_stream.state() != State::Open {}
 
-        fake_server.send("\n");
-        fake_server.send("data: some message\n");
+        stream_endpoint.send_line("data: some message");
 
         let message = rx.recv().unwrap();
         assert_eq!(message, "data: some message");
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
@@ -537,157 +531,123 @@ mod tests {
 
     #[test]
     fn should_reset_connection_on_status_205() {
-        let (event_stream, mut fake_server) = setup();
+        let (server, stream_endpoint, address) = setup();
+        stream_endpoint.status(Status::ResetContent);
 
-        let number_of_retries = Arc::new(Mutex::new(0));
-        let l = Arc::clone(&number_of_retries);
+        let event_stream = EventStream::new(address).unwrap();
 
-        fake_server.on_client_message(move |message| {
-            if message.starts_with("GET") {
-                let mut number_of_retries = l.lock().unwrap();
-                *number_of_retries += 1;
-            }
-        });
+        server.requests().recv().unwrap();
+        server.requests().recv().unwrap();
 
-        fake_server.send("HTTP/1.1 205 Reset Content\n");
-
-        loop {
-            let number_of_retries = number_of_retries.lock().unwrap();
-            if *number_of_retries == 2 {
-                break;
-            }
-        }
+        assert!(stream_endpoint.request_count() >= 2);
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_close_connection_when_content_type_is_not_event_stream() {
         let (error_tx, error_rx) = mpsc::channel();
-        let (mut event_stream, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint.header("Content-Type", "application/json");
+        let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_error(move |message| {
             error_tx.send(message).unwrap();
         });
 
-        fake_server.send("HTTP/1.1 200 OK\n");
-        fake_server.send("Content-Type: text/html\n");
 
         let message = error_rx.recv().unwrap();
         assert_eq!(message, "Wrong Content-Type");
 
-        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
-
         let state = event_stream.state();
         assert_eq!(state, State::Closed);
-
-        fake_server.close();
     }
 
     #[test]
     fn should_reconnect_when_status_in_range_2xx_but_not_200() {
-        let (event_stream, mut fake_server) = setup();
+        let (server, stream_endpoint, address) = setup();
+        stream_endpoint.status(Status::Accepted);
+        let event_stream = EventStream::new(address).unwrap();
 
-        let number_of_retries = Arc::new(Mutex::new(0));
-        let l = Arc::clone(&number_of_retries);
+        server.requests().recv().unwrap();
+        server.requests().recv().unwrap();
 
-        fake_server.on_client_message(move |message| {
-            if message.starts_with("GET") {
-                let mut number_of_retries = l.lock().unwrap();
-                *number_of_retries += 1;
-            }
-        });
-
-        fake_server.send("HTTP/1.1 202 Accepted\n");
-
-        loop {
-            let number_of_retries = number_of_retries.lock().unwrap();
-            if *number_of_retries == 2 {
-                break;
-            }
-        }
+        assert!(stream_endpoint.request_count() >= 2);
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
-    fn should_close_connection_when_returned_any_status_not_handled_in_privous_scenarios() {
+    fn should_close_connection_when_returned_any_status_not_handled_in_previous_scenarios() {
         let (error_tx, error_rx) = mpsc::channel();
-        let (mut event_stream, fake_server) = setup();
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint.status(Status::InternalServerError);
+        let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_error(move |message| {
             error_tx.send(message).unwrap();
         });
 
-        fake_server.send("HTTP/1.1 500 Internal Server Error\n");
-
         let message = error_rx.recv().unwrap();
         assert_eq!(message, "500 Internal Server Error");
 
-        thread::sleep(Duration::from_millis(1000));
-
         let state = event_stream.state();
         assert_eq!(state, State::Closed);
-
-        fake_server.close();
     }
 
     #[test]
     fn should_connect_to_provided_host_when_status_302() {
-        let (event_stream, fake_server) = setup();
-        let mut fake_server_2 = FakeServer::create("localhost:65444");
+        let (_server, stream_endpoint, address) = setup();
+        let (_server2, stream_endpoint2, address2) = setup();
+        stream_endpoint
+            .status(Status::Found)
+            .header("Location", address2.as_str());
 
-        let (redirect_server_tx, redirect_server_rx) = mpsc::channel();
+        let event_stream = EventStream::new(address).unwrap();
 
-        fake_server.send("HTTP/1.1 302 Found\n");
-        fake_server.send("Location: http://localhost:65444/sub\n");
-
-        thread::sleep(Duration::from_millis(200));
-
-        fake_server_2.on_client_message(move |message| {
-            if message.starts_with("GET") {
-                redirect_server_tx.send("connection open with second server").unwrap();
-            }
-        });
-
-        assert_eq!(redirect_server_rx.recv().unwrap(), "connection open with second server");
+        while stream_endpoint2.open_connections_count() != 1 {
+            thread::sleep(Duration::from_millis(200));
+        }
 
         event_stream.close();
-        fake_server.close();
-        fake_server_2.close();
     }
 
     #[test]
     fn should_reconnect_to_original_host_when_connection_to_redirected_host_is_lost() {
-        let (mut event_stream, fake_server) = setup();
-
         let (tx, rx) = mpsc::channel();
+        let (_server, stream_endpoint, address) = setup();
+        let (_server2, stream_endpoint2, address2) = setup();
+        stream_endpoint
+            .status(Status::Found)
+            .header("Location", address2.as_str());
+
+        let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_message(move |message| {
             tx.send(message).unwrap();
         });
 
-        fake_server.send("HTTP/1.1 302 Found\n");
-        fake_server.send("Location: http://localhost:6544/sub\n");
+        stream_endpoint.status(Status::OK);
+        stream_endpoint2.close_open_connections();
 
-        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS + 100));
+        while event_stream.state() != State::Open {}
 
-        fake_server.send("HTTP/1.1 200 Ok\n\n");
-        fake_server.send("data: some message\n\n");
-
+        stream_endpoint.send("data: from server 1\n\n");
         let message = rx.recv().unwrap();
-        assert_eq!(message, "data: some message");
+        assert_eq!(message, "data: from server 1");
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_reconnect_to_new_host_when_connection_lost_after_moved_permanently() {
-        let (mut event_stream, fake_server) = setup();
-        let fake_server_2 = FakeServer::create("localhost:60444");
+        let (_server, stream_endpoint, address) = setup();
+        let (_server2, stream_endpoint2, address2) = setup();
+        stream_endpoint
+            .status(Status::MovedPermanently)
+            .header("Location", address2.as_str());
+
+        let mut event_stream = EventStream::new(address).unwrap();
 
         let (tx, rx) = mpsc::channel();
 
@@ -695,217 +655,136 @@ mod tests {
             tx.send(message).unwrap();
         });
 
-        fake_server.send("HTTP/1.1 301 Moved Permanently\n");
-        fake_server.send("Location: http://localhost:60444/sub\n");
+        stream_endpoint2
+            .delay(Duration::from_millis(200))
+            .close_open_connections();
 
-        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS + 100));
+        while event_stream.state() != State::Connecting {}
+        while event_stream.state() != State::Open {}
 
-        fake_server_2.close();
-
-        loop {
-            thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
-            fake_server_2.send("\ndata: from server 2\n\n");
-            if let Ok(message) = rx.try_recv() {
-                assert_eq!(message, "data: from server 2");
-                break;
-            }
-        }
+        stream_endpoint2.send("data: from server 2\n");
+        assert_eq!(rx.recv().unwrap(), "data: from server 2");
 
         event_stream.close();
-        fake_server_2.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_connect_to_new_host_when_status_303() {
-        let (mut event_stream, fake_server) = setup();
-        let fake_server_2 = FakeServer::create("localhost:60445");
-
         let (tx, rx) = mpsc::channel();
+        let (_server, stream_endpoint, address) = setup();
+        let (_server2, stream_endpoint2, address2) = setup();
+
+        stream_endpoint
+            .status(Status::SeeOther)
+            .header("Location", address2.as_str());
+
+        let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_message(move |message| {
             tx.send(message).unwrap();
         });
 
-        fake_server.send("HTTP/1.1 303 See Other\n");
-        fake_server.send("Location: http://localhost:60445/sub\n");
-
-        loop {
-            thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
-            fake_server_2.send("\ndata: from server 2\n\n");
-            if let Ok(message) = rx.try_recv() {
-                assert_eq!(message, "data: from server 2");
-                break;
-            }
+        while stream_endpoint2.open_connections_count() == 0 {
+            thread::sleep(Duration::from_millis(100));
         }
 
+        stream_endpoint2.send("data: from server 2\n\n");
+        let message = rx.recv().unwrap();
+        assert_eq!(message, "data: from server 2");
+
         event_stream.close();
-        fake_server_2.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_connect_to_new_host_when_status_307() {
-        let (mut event_stream, fake_server) = setup();
-        let fake_server_2 = FakeServer::create("localhost:60446");
+        let (_server, stream_endpoint, address) = setup();
+        let (_server2, stream_endpoint2, address2) = setup();
 
-        let (tx, rx) = mpsc::channel();
+        stream_endpoint
+            .delay(Duration::from_millis(200))
+            .status(Status::TemporaryRedirect)
+            .header("Location", address2.as_str());
 
-        event_stream.on_message(move |message| {
-            tx.send(message).unwrap();
-        });
+        let event_stream = EventStream::new(address).unwrap();
 
-        fake_server.send("HTTP/1.1 307 Temporary Redirect\n");
-        fake_server.send("Location: http://localhost:60446/sub\n");
-
-        loop {
-            thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS));
-            fake_server_2.send("\ndata: from server 2\n\n");
-            if let Ok(message) = rx.try_recv() {
-                assert_eq!(message, "data: from server 2");
-                break;
-            }
+        while stream_endpoint2.open_connections_count() == 0 {
+            thread::sleep(Duration::from_millis(100));
         }
 
         event_stream.close();
-        fake_server_2.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_stop_reconnection_when_status_204() {
-        let (event_stream, fake_server) = setup();
+        let (server, stream_endpoint, address) = setup();
+        stream_endpoint.status(Status::Accepted);
 
-        fake_server.send("HTTP/1.1 202 Accepted\n");
+        let event_stream = EventStream::new(address).unwrap();
 
         assert_eq!(event_stream.state(), State::Connecting);
 
-        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS + 100));
-        fake_server.send("HTTP/1.1 204 No Content\n");
+        stream_endpoint.status(Status::NoContent);
+        server.requests().recv().unwrap();
 
-        thread::sleep(Duration::from_millis(100));
         assert_eq!(event_stream.state(), State::Closed);
 
         event_stream.close();
-        fake_server.close();
     }
 
 
     #[test]
     fn should_try_to_reconnect_with_an_exponential_backoff() {
-        let (event_stream, mut fake_server) = setup();
-
-        let number_of_retries = Arc::new(Mutex::new(0));
-        let l = Arc::clone(&number_of_retries);
-
-        fake_server.on_client_message(move |message| {
-            if message.starts_with("GET") {
-                let mut number_of_retries = l.lock().unwrap();
-                *number_of_retries += 1;
-            }
-        });
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint.status(Status::Accepted);
+        let event_stream = EventStream::new(address).unwrap();
 
         for _ in 0 .. 20 {
-            fake_server.send("HTTP/1.1 202 Accepted\n");
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(100))
         }
 
-        let retries_in_first_two_seconds;
-        {
-            retries_in_first_two_seconds = *(number_of_retries.lock().unwrap());
-        }
+        let retries_in_first_two_seconds = stream_endpoint.request_count();
 
         for _ in 0 .. 20 {
-            fake_server.send("HTTP/1.1 202 Accepted\n");
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(100))
         }
 
-        let retries_in_the_next_two_seconds;
-        {
-            retries_in_the_next_two_seconds = *(number_of_retries.lock().unwrap()) - retries_in_first_two_seconds;
-        }
+        let retries_in_the_next_two_seconds = stream_endpoint.request_count() - retries_in_first_two_seconds;
 
         assert!(retries_in_first_two_seconds > retries_in_the_next_two_seconds);
 
         event_stream.close();
-        fake_server.close();
     }
 
     #[test]
     fn should_reset_exponential_backoff_after_success_connection() {
-        let (event_stream, mut fake_server) = setup();
-
-        let number_of_retries = Arc::new(Mutex::new(0));
-        let l = Arc::clone(&number_of_retries);
-
-        fake_server.on_client_message(move |message| {
-            if message.starts_with("GET") {
-                let mut number_of_retries = l.lock().unwrap();
-                *number_of_retries += 1;
-            }
-        });
+        let (_server, stream_endpoint, address) = setup();
+        stream_endpoint.status(Status::Accepted);
+        let event_stream = EventStream::new(address).unwrap();
 
         for _ in 0 .. 20 {
-            fake_server.send("HTTP/1.1 202 Accepted\n");
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(100))
         }
 
-        let retries_in_first_two_seconds;
-        {
-            retries_in_first_two_seconds = *(number_of_retries.lock().unwrap());
-        }
+        let retries_in_first_two_seconds = stream_endpoint.request_count();
+
+        stream_endpoint.status(Status::OK);
 
         while event_stream.state() != State::Open {
-            fake_server.send("HTTP/1.1 200 Ok\n\n");
             thread::sleep(Duration::from_millis(100));
         }
 
-        fake_server.break_current_connection();
+        stream_endpoint.status(Status::Accepted);
+        stream_endpoint.close_open_connections();
 
         for _ in 0 .. 20 {
-            fake_server.send("HTTP/1.1 202 Accepted\n");
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(100))
         }
 
-        let retries_in_the_next_two_seconds;
-        {
-            retries_in_the_next_two_seconds = *(number_of_retries.lock().unwrap()) - retries_in_first_two_seconds;
-        }
+        let retries_in_the_next_two_seconds = stream_endpoint.request_count() - retries_in_first_two_seconds;
 
         assert_eq!(retries_in_first_two_seconds, retries_in_the_next_two_seconds);
 
         event_stream.close();
-        fake_server.close();
-    }
-
-    #[test]
-    fn should_send_last_event_id_on_reconnection() {
-        let (event_stream, mut fake_server) = setup();
-        let expected_header = Arc::new(Mutex::new(None));
-
-        event_stream.set_last_id(String::from("123abc"));
-
-        let header = Arc::clone(&expected_header);
-        fake_server.on_client_message(move |message| {
-            if message.starts_with("Last-Event-ID") {
-                let mut header = header.lock().unwrap();
-                *header = Some(message);
-            }
-        });
-
-        fake_server.send("HTTP/1.1 202 Accepted\n");
-        thread::sleep(Duration::from_millis(INITIAL_RECONNECTION_TIME_IN_MS + 100));
-
-        let expected_header = expected_header.lock().unwrap();
-
-        if let Some(ref header) = *expected_header {
-            assert_eq!(header, "Last-Event-ID: 123abc");
-        } else {
-            panic!("should contain last id header");
-        }
-
-        event_stream.close();
-        fake_server.close();
     }
 
     #[test]
