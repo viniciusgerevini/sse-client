@@ -553,7 +553,6 @@ mod tests {
             .delay(Duration::from_millis(100))
             .status(Status::InternalServerError);
         let event_source = EventSource::new(&address).unwrap();
-        thread::sleep(Duration::from_millis(100));
         let rx = event_source.receiver();
 
         assert_eq!(rx.recv().unwrap().type_, "error");
