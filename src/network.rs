@@ -483,7 +483,9 @@ mod tests {
 
         server.requests().recv().unwrap();
 
-        while event_stream.state() != State::Open {}
+        while event_stream.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        }
 
         stream_endpoint.send("data: some message\n\n");
 
@@ -610,7 +612,9 @@ mod tests {
         stream_endpoint.status(Status::OK);
         stream_endpoint2.close_open_connections();
 
-        while event_stream.state() != State::Open {}
+        while event_stream.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        }
 
         stream_endpoint.send("data: from server 1\n\n");
         let message = rx.recv().unwrap();
@@ -639,8 +643,12 @@ mod tests {
             .delay(Duration::from_millis(200))
             .close_open_connections();
 
-        while event_stream.state() != State::Connecting {}
-        while event_stream.state() != State::Open {}
+        while event_stream.state() != State::Connecting {
+            thread::sleep(Duration::from_millis(100));
+        }
+        while event_stream.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        }
 
         stream_endpoint2.send("data: from server 2\n");
         assert_eq!(rx.recv().unwrap(), "data: from server 2");
