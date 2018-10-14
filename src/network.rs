@@ -437,11 +437,12 @@ mod tests {
         let mut event_stream = EventStream::new(address).unwrap();
 
         event_stream.on_error(move |message| {
-            println!("{}", message);
             tx.send(message).unwrap();
         });
 
-        while event_stream.state() == State::Connecting {};
+        while event_stream.state() != State::Open {
+            thread::sleep(Duration::from_millis(100));
+        };
 
         stream_endpoint.close_open_connections();
 
