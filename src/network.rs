@@ -480,6 +480,8 @@ mod tests {
 
         server.requests().recv().unwrap();
 
+        while event_stream.state() != State::Open {}
+
         stream_endpoint.send("data: some message\n\n");
 
         assert_eq!(rx.recv().unwrap(), "data: some message");
