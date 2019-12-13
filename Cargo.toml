@@ -1,9 +1,9 @@
 [package]
 name = "sse-client"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Vinicius Gerevini <viniciusgerevini@gmail.com>"]
 readme = "README.md"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/viniciusgerevini/sse-client"
 description = "Client for streams of Server-Sent Events"
 keywords = ["sse", "server-sent", "events", "event-source"]
