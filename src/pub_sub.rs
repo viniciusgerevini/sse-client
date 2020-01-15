@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 pub struct Bus<ListenerData> where ListenerData: Clone {
-    listeners: HashMap<String, Vec<Box<Fn(ListenerData) + Send>>>
+    listeners: HashMap<String, Vec<Box<dyn Fn(ListenerData) + Send>>>
 }
 
 impl<ListenerData> Bus <ListenerData> where ListenerData: Clone {
