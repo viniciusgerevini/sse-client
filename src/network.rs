@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use std::io::BufReader;
 use std::time::Duration;
 
-type Callback = Arc<Mutex<Option<Box<Fn(String) + Send>>>>;
-type CallbackNoArgs = Arc<Mutex<Option<Box<Fn() + Send>>>>;
+type Callback = Arc<Mutex<Option<Box<dyn Fn(String) + Send>>>>;
+type CallbackNoArgs = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
 type StreamWrapper = Arc<Mutex<Option<TcpStream>>>;
 type StateWrapper = Arc<Mutex<State>>;
 type LastIdWrapper = Arc<Mutex<Option<String>>>;
@@ -275,13 +275,13 @@ fn validate_content_type(line: String) -> Result<(), StreamAction> {
 }
 
 fn validate_status_code(line: String) -> Result<(i32), StreamAction> {
-    let status = &line[9..].trim_right();
+    let status = &line[9..].trim_end();
     let status_code: i32 = status[..3].parse().unwrap();
 
     match status_code {
         200 | 301 | 302 | 303 | 307 => Ok(status_code),
         204 => Err(StreamAction::Close(status.to_string())),
-        200 ... 299 => Err(StreamAction::Reconnect(status.to_string())),
+        200 ..= 299 => Err(StreamAction::Reconnect(status.to_string())),
         _ => Err(StreamAction::Close(status.to_string()))
     }
 }
