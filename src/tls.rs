@@ -1,5 +1,5 @@
 use native_tls::{TlsConnector, TlsStream};
-use std::net::{Shutdown, TcpStream};
+use std::net::TcpStream;
 use std::io::{self, Result};
 use std::time::Duration;
 use std::sync::Arc;
@@ -30,10 +30,10 @@ impl MaybeTlsStream {
         }
     }
 
-    pub(crate) fn shutdown(&mut self, how: Shutdown) -> Result<()> {
+    pub(crate) fn clone_plain_handle(&self) -> Result<TcpStream> {
         match self {
-            Self::Tls(inner) => inner.lock().unwrap().shutdown(),
-            Self::Plain(inner) => inner.lock().unwrap().shutdown(how),
+            Self::Tls(inner) => inner.lock().unwrap().get_ref().try_clone(),
+            Self::Plain(inner) => inner.lock().unwrap().try_clone(),
         }
     }
 }

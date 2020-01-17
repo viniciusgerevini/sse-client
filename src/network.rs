@@ -17,7 +17,7 @@ type InnerStream = TcpStream;
 
 type Callback = Arc<Mutex<Option<Box<dyn Fn(String) + Send>>>>;
 type CallbackNoArgs = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
-type StreamWrapper = Arc<Mutex<Option<InnerStream>>>;
+type StreamWrapper = Arc<Mutex<Option<TcpStream>>>;
 type StateWrapper = Arc<Mutex<State>>;
 type LastIdWrapper = Arc<Mutex<Option<String>>>;
 
@@ -86,7 +86,7 @@ impl EventStream {
     pub fn close(&self) {
         let mut state = self.state.lock().unwrap();
         *state = State::Closed;
-        if let Some(ref mut st) = *self.stream.lock().unwrap() {
+        if let Some(ref st) = *self.stream.lock().unwrap() {
             st.shutdown(Shutdown::Both).unwrap();
         }
     }
@@ -129,8 +129,8 @@ fn listen_stream(
     last_event_id: LastIdWrapper
 ) {
     thread::spawn(move || {
-        let action = match connect_event_stream(&connection_url, &last_event_id) {
-            Ok(stream) => read_stream(&stream, &state, &on_open, &on_message, &failed_attempts).map(|_| stream),
+        let action = match connect_event_stream(&connection_url, &stream, &last_event_id) {
+            Ok(stream) => read_stream(stream, &state, &on_open, &on_message, &failed_attempts),
             Err(error) => Err(StreamAction::Reconnect(error.to_string()))
         };
 
@@ -164,8 +164,16 @@ fn listen_stream(
     });
 }
 
-fn connect_event_stream(url: &Url, last_event_id: &LastIdWrapper) -> Result<InnerStream, Error> {
+fn connect_event_stream(url: &Url, stream: &StreamWrapper, last_event_id: &LastIdWrapper) -> Result<InnerStream, Error> {
     let connection_stream = event_stream_handshake(url, last_event_id)?;
+    let mut stream = stream.lock().unwrap();
+
+    #[cfg(feature = "native-tls")]
+    { *stream = Some(connection_stream.clone_plain_handle().unwrap()); }
+
+    #[cfg(not(feature = "native-tls"))]
+    { *stream = Some(connection_stream.try_clone().unwrap()); }
+
     Ok(connection_stream)
 }
 
@@ -221,7 +229,7 @@ fn get_host(url: &Url) -> String {
 }
 
 fn read_stream(
-    connection_stream: &InnerStream,
+    connection_stream: InnerStream,
     state: &StateWrapper,
     on_open: &CallbackNoArgs,
     on_message: &Callback,
