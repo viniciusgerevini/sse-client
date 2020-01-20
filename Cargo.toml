@@ -1,6 +1,6 @@
 [package]
 name = "sse-client"
-version = "1.0.2"
+version = "1.1.0"
 authors = ["Vinicius Gerevini <viniciusgerevini@gmail.com>"]
 readme = "README.md"
 license = "MIT OR Apache-2.0"
@@ -8,8 +8,14 @@ repository = "https://github.com/viniciusgerevini/sse-client"
 description = "Client for streams of Server-Sent Events"
 keywords = ["sse", "server-sent", "events", "event-source"]
 
+[features]
+default = []
+native-tls = ["native-tls-crate"]
+native-tls-vendored = ["native-tls", "native-tls-crate/vendored"]
+
 [dependencies]
 url = "1.7.0"
+native-tls-crate = { package = "native-tls", version = "0.2.3", optional = true }
 
 [dev-dependencies]
 http-test-server = "1.0.0"

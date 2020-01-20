@@ -38,9 +38,14 @@
 //! ```
 extern crate url;
 
+#[cfg(feature = "native-tls")]
+extern crate native_tls_crate as native_tls;
+
 #[cfg(test)]
 extern crate http_test_server;
 
+#[cfg(feature = "native-tls")]
+mod tls;
 mod network;
 mod pub_sub;
 mod data;

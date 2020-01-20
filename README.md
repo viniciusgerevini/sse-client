@@ -40,6 +40,11 @@ for event in event_source.receiver().iter() {
     println!("New Message: {}", event.data);
 }
 ```
+## Cargo features
+
+* `native-tls` enables support for HTTPS URLs using [native-tls](https://crates.io/crates/native-tls)
+* `native-tls-vendored` will additionally link OpenSSL statically
+
 ## License
 
 Licensed under either of

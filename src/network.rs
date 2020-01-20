@@ -7,6 +7,13 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::io::BufReader;
 use std::time::Duration;
+#[cfg(feature = "native-tls")]
+use crate::tls::MaybeTlsStream;
+
+#[cfg(feature = "native-tls")]
+type InnerStream = MaybeTlsStream;
+#[cfg(not(feature = "native-tls"))]
+type InnerStream = TcpStream;
 
 type Callback = Arc<Mutex<Option<Box<dyn Fn(String) + Send>>>>;
 type CallbackNoArgs = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
@@ -157,20 +164,37 @@ fn listen_stream(
     });
 }
 
-fn connect_event_stream(url: &Url, stream: &StreamWrapper, last_event_id: &LastIdWrapper) -> Result<TcpStream, Error> {
+fn connect_event_stream(url: &Url, stream: &StreamWrapper, last_event_id: &LastIdWrapper) -> Result<InnerStream, Error> {
     let connection_stream = event_stream_handshake(url, last_event_id)?;
     let mut stream = stream.lock().unwrap();
-    *stream = Some(connection_stream.try_clone().unwrap());
+
+    #[cfg(feature = "native-tls")]
+    { *stream = Some(connection_stream.clone_plain_handle().unwrap()); }
+
+    #[cfg(not(feature = "native-tls"))]
+    { *stream = Some(connection_stream.try_clone().unwrap()); }
 
     Ok(connection_stream)
 }
 
-fn event_stream_handshake(url: &Url, last_event_id: &LastIdWrapper) -> Result<TcpStream, Error> {
+fn event_stream_handshake(url: &Url, last_event_id: &LastIdWrapper) -> Result<InnerStream, Error> {
     let path = url.path();
     let host = get_host(&url);
     let host = host.as_str();
 
+    #[cfg(feature = "native-tls")]
+    let mut stream = {
+        let plain = TcpStream::connect(host)?;
+        if url.scheme() == "https" {
+            MaybeTlsStream::try_wrap_tls(plain, url.host_str().unwrap_or("localhost"))?
+        } else {
+            MaybeTlsStream::wrap_plain(plain)
+        }
+    };
+
+    #[cfg(not(feature = "native-tls"))]
     let mut stream = TcpStream::connect(host)?;
+
     stream.set_read_timeout(Some(Duration::from_millis(60000)))?;
 
     let extra_headers = match *(last_event_id.lock().unwrap()) {
@@ -205,7 +229,7 @@ fn get_host(url: &Url) -> String {
 }
 
 fn read_stream(
-    connection_stream: TcpStream,
+    connection_stream: InnerStream,
     state: &StateWrapper,
     on_open: &CallbackNoArgs,
     on_message: &Callback,
