@@ -1,6 +1,6 @@
 # SSE Client
 
-[![Documentation](https://docs.rs/sse-client/badge.svg)](https://docs.rs/sse-client/)
+[![Documentation](https://docs.rs/sse-client/badge.svg)](https://docs.rs/sse-client/) [![Build Status](https://travis-ci.com/viniciusgerevini/sse-client.svg?branch=master)](https://travis-ci.com/viniciusgerevini/sse-client)
 
 EventSource implementation in Rust to handle streams of Server-Sent Events.
 It handles connections, redirections, retries and message parsing.
