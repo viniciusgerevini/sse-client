@@ -733,15 +733,17 @@ mod tests {
     #[test]
     fn should_stop_reconnection_when_status_204() {
         let (server, stream_endpoint, address) = setup();
-        stream_endpoint.status(Status::Accepted);
-
         let event_stream = EventStream::new(address).unwrap();
 
-        assert_eq!(event_stream.state(), State::Connecting);
-
-        stream_endpoint.status(Status::NoContent);
+        // first connection
+        stream_endpoint.status(Status::OK);
         server.requests().recv().unwrap();
 
+        // change status to 204 and kill connections
+        stream_endpoint.status(Status::NoContent);
+        stream_endpoint.close_open_connections();
+
+        server.requests().recv().unwrap();
         assert_eq!(event_stream.state(), State::Closed);
 
         event_stream.close();
