@@ -2,6 +2,12 @@
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
+## [Unreleased]
+
+### Fixed
+
+- Query parameters were being stripped from connection URL. Thanks @Cldfire for finding this bug.
+
 ## 1.1.0 (2020-01-20)
 
 ### Added

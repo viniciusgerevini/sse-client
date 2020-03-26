@@ -178,7 +178,6 @@ fn connect_event_stream(url: &Url, stream: &StreamWrapper, last_event_id: &LastI
 }
 
 fn event_stream_handshake(url: &Url, last_event_id: &LastIdWrapper) -> Result<InnerStream, Error> {
-    let path = url.path();
     let host = get_host(&url);
     let host = host.as_str();
 
@@ -204,7 +203,7 @@ fn event_stream_handshake(url: &Url, last_event_id: &LastIdWrapper) -> Result<In
 
     let request = format!(
         "GET {} HTTP/1.1\r\nAccept: text/event-stream\r\nHost: {}\r\n{}\r\n",
-        path,
+        get_path_with_query_params(url),
         host,
         extra_headers
     );
@@ -226,6 +225,13 @@ fn get_host(url: &Url) -> String {
     }
 
     host
+}
+
+fn get_path_with_query_params(url: &Url) -> String {
+    match url.query() {
+        Some(query) => format!("{}?{}", url.path(), query),
+        None => url.path().to_owned()
+    }
 }
 
 fn read_stream(
@@ -811,6 +817,30 @@ mod tests {
         let host = get_host(&url);
 
         assert_eq!(host, String::from("localhost:443"));
+    }
+
+    #[test]
+    fn should_keep_query_parameters_in_connection_url() {
+        let resource_uri = "/sub?q=1&query=3&token=abcd";
+        let server = TestServer::new().unwrap();
+        let stream_endpoint = server.create_resource(resource_uri);
+        let address = format!("http://localhost:{}{}", server.port(), resource_uri);
+        let stream_url = Url::parse(address.as_str()).unwrap();
+
+        stream_endpoint
+            .status(Status::OK)
+            .header("Content-Type", "text/event-stream")
+            .stream();
+
+        let event_stream = EventStream::new(stream_url).unwrap();
+
+        thread::sleep(Duration::from_millis(100));
+
+        let state = event_stream.state();
+        assert_eq!(state, State::Open);
+
+
+        event_stream.close();
     }
 }
 
