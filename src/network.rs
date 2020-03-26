@@ -304,14 +304,14 @@ fn validate_content_type(line: String) -> Result<(), StreamAction> {
     }
 }
 
-fn validate_status_code(line: String) -> Result<(i32), StreamAction> {
+fn validate_status_code(line: String) -> Result<i32, StreamAction> {
     let status = &line[9..].trim_end();
     let status_code: i32 = status[..3].parse().unwrap();
 
     match status_code {
         200 | 301 | 302 | 303 | 307 => Ok(status_code),
         204 => Err(StreamAction::Close(status.to_string())),
-        200 ..= 299 => Err(StreamAction::Reconnect(status.to_string())),
+        201 ..= 203 | 205 ..= 299 => Err(StreamAction::Reconnect(status.to_string())),
         _ => Err(StreamAction::Close(status.to_string()))
     }
 }
