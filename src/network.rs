@@ -305,6 +305,9 @@ fn validate_content_type(line: String) -> Result<(), StreamAction> {
 }
 
 fn validate_status_code(line: String) -> Result<i32, StreamAction> {
+    if line.len() <= 9 {
+        return Err(StreamAction::Close(String::from("Invalid status line")));
+    }
     let status = &line[9..].trim_end();
     let status_code: i32 = status[..3].parse().unwrap();
 
