@@ -32,7 +32,7 @@
 //! let event_source = EventSource::new("http://event-stream-address/sub").unwrap();
 //!
 //! for event in event_source.receiver().iter() {
-//!     println!("New Message: {}", event.data);
+//!     println!("New Message: {:?}", event.data);
 //! }
 //!
 //! ```
@@ -56,7 +56,7 @@ use network::EventStream;
 use pub_sub::Bus;
 use data::{EventBuilder, EventBuilderState};
 
-pub use data::Event;
+pub use data::{Event, EventData};
 pub use network::State;
 
 
@@ -92,8 +92,11 @@ impl EventSource {
         let event_bus = Arc::clone(&bus);
         event_stream.on_error(move |message| {
             let event_bus = event_bus.lock().unwrap();
-            let event = Event::new("error", &message);
-            event_bus.publish(event.type_.clone(), event);
+            let event = EventData::new()
+                .event("error")
+                .data(message)
+                .build();
+            event_bus.publish("error".to_string(), event);
         });
 
         let event_builder = Arc::new(Mutex::new(EventBuilder::new()));
@@ -148,7 +151,7 @@ impl EventSource {
     /// let event_source = EventSource::new("http://example.com/sub").unwrap();
     ///
     /// event_source.on_message(|message| {
-    ///     println!("Message received: {}", message.data);
+    ///     println!("Message received: {:?}", message.data);
     /// });
     /// ```
     pub fn on_message<F>(&self, listener: F) where F: Fn(Event) + Send + 'static {
@@ -170,16 +173,16 @@ impl EventSource {
     ///
     ///
     /// event_source.add_event_listener("myEvent", |event| {
-    ///     println!("Event {} received: {}", event.type_, event.data);
+    ///     println!("Event {:?} received: {:?}", event.event, event.data);
     /// });
     ///
     /// event_source.add_event_listener("error", |error| {
-    ///     println!("Error: {}", error.data);
+    ///     println!("Error: {:?}", error.data);
     /// });
     ///
     /// // equivalent to `on_message`
     /// event_source.add_event_listener("message", |message| {
-    ///     println!("Message received: {}", message.data);
+    ///     println!("Message received: {:?}", message.data);
     /// });
     /// ```
     pub fn add_event_listener<F>(&self, event_type: &str, listener: F) where F: Fn(Event) + Send + 'static {
@@ -214,7 +217,7 @@ impl EventSource {
     /// let event_source = EventSource::new("http://example.com/sub").unwrap();
     ///
     /// for event in event_source.receiver().iter() {
-    ///     println!("New Message: {}", event.data);
+    ///     println!("New Message: {:?}", event.data);
     /// }
     ///
     /// ```
@@ -246,8 +249,10 @@ impl EventSource {
 
 fn publish_initial_stream_event(event_bus: &Arc<Mutex<Bus<Event>>>) {
     let event_bus = event_bus.lock().unwrap();
-    let event = Event::new("stream_opened", "");
-    event_bus.publish(event.type_.clone(), event);
+    let event = EventData::new()
+        .event("stream_opened")
+        .build();
+    event_bus.publish("stream_opened".to_string(), event);
 }
 
 fn handle_message(
@@ -260,8 +265,12 @@ fn handle_message(
 
     if let EventBuilderState::Complete(event) = event_builder.update(&message) {
         let event_bus = event_bus.lock().unwrap();
-        event_stream.lock().unwrap().set_last_id(event.id.clone());
-        event_bus.publish(event.type_.clone(), event);
+        if let Some(id) = event.id.as_ref() {
+            event_stream.lock().unwrap().set_last_id(id.clone());
+        }
+        if let Some(e) = event.event.as_ref() {
+            event_bus.publish(e.clone(), event);
+        }
         event_builder.clear();
     }
 }
@@ -319,7 +328,7 @@ mod tests {
             .send_line("data: some message").send_line("");
 
         let message = rx.recv().unwrap();
-        assert_eq!(message, "some message");
+        assert_eq!(message, Some("some message".to_string()));
 
         event_source.close();
     }
@@ -348,8 +357,8 @@ mod tests {
         let message = rx.recv().unwrap();
         let message2 = rx.recv().unwrap();
 
-        assert_eq!(message, "some message");
-        assert_eq!(message2, "some message");
+        assert_eq!(message, Some("some message".to_string()));
+        assert_eq!(message2, Some("some message".to_string()));
 
         event_source.close();
     }
@@ -380,8 +389,8 @@ mod tests {
         let message = rx.recv().unwrap();
         let message2 = rx.recv().unwrap();
 
-        assert_eq!(message, "message");
-        assert_eq!(message2, "this is a message");
+        assert_eq!(message, Some("message".to_string()));
+        assert_eq!(message2, Some("this is a message".to_string()));
 
         event_source.close();
     }
@@ -411,8 +420,8 @@ mod tests {
         let message = rx.recv().unwrap();
         let message2 = rx.recv().unwrap();
 
-        assert_eq!(message, "message");
-        assert_eq!(message2, "this is a message");
+        assert_eq!(message, Some("message".to_string()));
+        assert_eq!(message2, Some("this is a message".to_string()));
 
         event_source.close();
     }
@@ -437,8 +446,8 @@ mod tests {
 
         let message = rx.recv().unwrap();
 
-        assert_eq!(message.type_, String::from("myEvent"));
-        assert_eq!(message.data, String::from("my message"));
+        assert_eq!(message.event, Some("myEvent".to_string()));
+        assert_eq!(message.data, Some("my message".to_string()));
 
         event_source.close();
     }
@@ -557,8 +566,8 @@ mod tests {
         stream_endpoint.send("data: some message\n\n");
         stream_endpoint.send("data: some message 2\n\n");
 
-        assert_eq!(rx.recv().unwrap().data, "some message");
-        assert_eq!(rx.recv().unwrap().data, "some message 2");
+        assert_eq!(rx.recv().unwrap().data, Some("some message".to_string()));
+        assert_eq!(rx.recv().unwrap().data, Some("some message 2".to_string()));
 
         event_source.close();
     }
@@ -572,7 +581,7 @@ mod tests {
         let event_source = EventSource::new(&address).unwrap();
         let rx = event_source.receiver();
 
-        assert_eq!(rx.recv().unwrap().type_, "error");
+        assert_eq!(rx.recv().unwrap().event, Some("error".to_string()));
 
         event_source.close();
     }
