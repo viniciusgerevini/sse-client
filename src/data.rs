@@ -108,7 +108,10 @@ impl EventBuilder {
 
         match parse_field(message) {
             ("event", value) => pending_event.event = Some(value.to_string()),
-            ("data", value) => pending_event.data = Some(value.to_string()),
+            ("data", value) => pending_event.data = match pending_event.data {
+                Some(ref old_data) => Some(format!("{}\n{}", old_data, value)),
+                None => Some(value.to_string())
+            },
             ("id", value) => pending_event.id = Some(value.to_string()),
             ("retry", value) => pending_event.retry = Some(value.to_string()),
             _ => {}

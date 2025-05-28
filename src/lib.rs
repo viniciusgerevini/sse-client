@@ -585,4 +585,20 @@ mod tests {
 
         event_source.close();
     }
+
+    #[test]
+    fn should_receive_multiple_data() {
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let rx = event_source.receiver();
+
+        stream_endpoint.send("data: YHOO\n");
+        stream_endpoint.send("data: +2\n");
+        stream_endpoint.send("data: 10\n\n");
+
+        assert_eq!(rx.recv().unwrap().data, Some("YHOO\n+2\n10".to_string()));
+
+        event_source.close();
+    }
 }
