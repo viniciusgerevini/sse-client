@@ -601,4 +601,43 @@ mod tests {
 
         event_source.close();
     }
+
+    #[test]
+    fn should_receive_whitespace_characters() {
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let rx = event_source.receiver();
+
+        stream_endpoint.send("data:second event\nid\n\n");
+        stream_endpoint.send("data:  a single leading space character\n\n");
+        stream_endpoint.send("data\n\n");
+        stream_endpoint.send("data\ndata\n\n");
+        stream_endpoint.send("data:\n\n");
+        stream_endpoint.send("data\n\n");
+
+        assert_eq!(rx.recv().unwrap().id, Some("".to_string()));
+        assert_eq!(rx.recv().unwrap().data, Some(" a single leading space character".to_string()));
+        assert_eq!(rx.recv().unwrap().data, Some("".to_string()));
+        assert_eq!(rx.recv().unwrap().data, Some("\n".to_string()));
+        assert_eq!(rx.recv().unwrap().id, None);
+
+        event_source.close();
+    }
+
+    #[test]
+    fn should_receive_the_same_string() {
+        let (_server, stream_endpoint, address) = setup();
+        let event_source = EventSource::new(&address).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let rx = event_source.receiver();
+
+        stream_endpoint.send("data:test\n\n");
+        stream_endpoint.send("data: test\n\n");
+
+        assert_eq!(rx.recv().unwrap().data, Some("test".to_string()));
+        assert_eq!(rx.recv().unwrap().data, Some("test".to_string()));
+
+        event_source.close();
+    }
 }

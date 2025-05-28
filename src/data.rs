@@ -83,7 +83,7 @@ impl EventBuilder {
     pub fn update(&mut self, message: &str) -> EventBuilderState {
         if message == "" {
             self.finalize_event();
-        } else if !message.starts_with(":") && message.contains(":") {
+        } else if !message.starts_with(":") {
             self.pending_event = self.update_event(message);
         }
 
@@ -131,7 +131,14 @@ impl EventBuilder {
 
 fn parse_field<'a>(message: &'a str) -> (&'a str, &'a str) {
     let parts: Vec<&str> = message.splitn(2, ":").collect();
-    (parts[0], parts[1].trim())
+    if parts.len() < 2 {
+        return (parts[0], "");
+    }
+    if parts[1].starts_with(" ") {
+        (parts[0], &parts[1][1..])
+    } else {
+        (parts[0], parts[1])
+    }
 }
 
 #[cfg(test)]
