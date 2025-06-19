@@ -5,12 +5,14 @@ pub struct EventBuilder {
 /// Event data sent by server
 #[derive(Debug, PartialEq, Clone)]
 pub struct Event {
-    /// Represents message `id` field. Default "".
-    pub id: String,
-    /// Represents message `event` field. Default "message".
-    pub type_: String,
-    /// Represents message `data` field. Default "".
-    pub data: String
+    /// Represents message `event` field.
+    pub event: Option<String>,
+    /// Represents message `data` field.
+    pub data: Option<String>,
+    /// Represents message `id` field.
+    pub id: Option<String>,
+    /// Represents message `retry` field.
+    pub retry: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -21,8 +23,55 @@ pub enum EventBuilderState {
 }
 
 impl Event {
-    pub fn new(type_: &str, data: &str) -> Event {
-        Event { id: String::from(""), type_: String::from(type_), data: String::from(data) }
+    pub fn new() -> Event {
+        Event {
+            event: None,
+            data: None,
+            id: None,
+            retry: None,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct EventData {
+    event: Option<String>,
+    data: Option<String>,
+    id: Option<String>,
+    retry: Option<String>,
+}
+
+impl EventData {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn event(mut self, event: impl Into<String>) -> Self {
+        self.event = Some(event.into());
+        self
+    }
+
+    pub fn data(mut self, data: impl Into<String>) -> Self {
+        self.data = Some(data.into());
+        self
+    }
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn retry(mut self, retry: impl Into<String>) -> Self {
+        self.retry = Some(retry.into());
+        self
+    }
+
+    pub fn build(self) -> Event {
+        Event {
+            event: self.event,
+            data: self.data,
+            id: self.id,
+            retry: self.retry,
+        }
     }
 }
 
@@ -34,7 +83,7 @@ impl EventBuilder {
     pub fn update(&mut self, message: &str) -> EventBuilderState {
         if message == "" {
             self.finalize_event();
-        } else if !message.starts_with(":") && message.contains(":") {
+        } else if !message.starts_with(":") {
             self.pending_event = self.update_event(message);
         }
 
@@ -52,13 +101,19 @@ impl EventBuilder {
     fn update_event(&mut self, message: &str) -> EventBuilderState {
         let mut pending_event = match &self.pending_event {
             EventBuilderState::Pending(ref e) => e.clone(),
-            _ => Event::new("message", "")
+            _ => EventData::new()
+                .event("message")
+                .build(),
         };
 
         match parse_field(message) {
-            ("data", value) => pending_event.data = String::from(value),
-            ("event", value) => pending_event.type_ = String::from(value),
-            ("id", value) => pending_event.id = String::from(value),
+            ("event", value) => pending_event.event = Some(value.to_string()),
+            ("data", value) => pending_event.data = match pending_event.data {
+                Some(ref old_data) => Some(format!("{}\n{}", old_data, value)),
+                None => Some(value.to_string())
+            },
+            ("id", value) => pending_event.id = Some(value.to_string()),
+            ("retry", value) => pending_event.retry = Some(value.to_string()),
             _ => {}
         }
 
@@ -66,7 +121,7 @@ impl EventBuilder {
     }
 
     pub fn clear(&mut self) {
-        self.pending_event =  EventBuilderState::Empty;
+        self.pending_event = EventBuilderState::Empty;
     }
 
     pub fn get_event(&self) -> EventBuilderState {
@@ -76,7 +131,14 @@ impl EventBuilder {
 
 fn parse_field<'a>(message: &'a str) -> (&'a str, &'a str) {
     let parts: Vec<&str> = message.splitn(2, ":").collect();
-    (parts[0], parts[1].trim())
+    if parts.len() < 2 {
+        return (parts[0], "");
+    }
+    if parts[1].starts_with(" ") {
+        (parts[0], &parts[1][1..])
+    } else {
+        (parts[0], parts[1])
+    }
 }
 
 #[cfg(test)]
@@ -96,7 +158,7 @@ mod tests {
         e.update("data: test");
 
         if let EventBuilderState::Pending(event) = e.get_event() {
-            assert_eq!(event.type_, String::from("message"));
+            assert_eq!(event.event, Some("message".to_string()));
         } else {
             panic!("event should be pending");
         }
@@ -109,7 +171,7 @@ mod tests {
         e.update("");
 
         if let EventBuilderState::Complete(event) = e.get_event() {
-            assert_eq!(event.data, String::from("test"));
+            assert_eq!(event.data, Some("test".to_string()));
         } else {
             panic!("event should be complete");
         }
@@ -129,7 +191,7 @@ mod tests {
         e.update("data: test");
 
         if let EventBuilderState::Pending(event) = e.get_event() {
-            assert_eq!(event.data, String::from("test"));
+            assert_eq!(event.data, Some("test".to_string()));
         } else {
             panic!("event should be pending");
         }
@@ -141,7 +203,7 @@ mod tests {
         e.update("event: some_event");
 
         if let EventBuilderState::Pending(event) = e.get_event() {
-            assert_eq!(event.type_, String::from("some_event"));
+            assert_eq!(event.event, Some("some_event".to_string()));
         } else {
             panic!("event should be pending");
         }
@@ -153,7 +215,7 @@ mod tests {
         e.update("id: 123abc");
 
         if let EventBuilderState::Pending(event) = e.get_event() {
-            assert_eq!(event.id, String::from("123abc"));
+            assert_eq!(event.id, Some("123abc".to_string()));
         } else {
             panic!("event should be pending");
         }
@@ -161,7 +223,10 @@ mod tests {
 
     #[test]
     fn should_incrementally_fill_event_fields() {
-        let expected_event = Event::new("some_event", "test");
+        let expected_event = EventData::new()
+            .event("some_event")
+            .data("test")
+            .build();
         let mut e = EventBuilder::new();
         e.update("event: some_event");
         e.update("data: test");
@@ -186,7 +251,10 @@ mod tests {
 
     #[test]
     fn should_start_clean_event_after_previous_is_completed() {
-        let expected_event = Event::new("message", "test2");
+        let expected_event = EventData::new()
+            .event("message")
+            .data("test2")
+            .build();
         let mut e = EventBuilder::new();
 
         e.update("event: some_event");
@@ -203,7 +271,10 @@ mod tests {
 
     #[test]
     fn should_ignore_updates_started_with_colon() {
-        let expected_event = Event::new("some_event", "test");
+        let expected_event = EventData::new()
+            .event("some_event")
+            .data("test")
+            .build();
         let mut e = EventBuilder::new();
 
         e.update("event: some_event");
@@ -226,7 +297,10 @@ mod tests {
 
     #[test]
     fn should_parse_messages_even_with_colons() {
-        let expected_event = Event::new("some:id:with:colons", "some:data:with:colons");
+        let expected_event = EventData::new()
+            .event("some:id:with:colons")
+            .data("some:data:with:colons")
+            .build();
         let mut e = EventBuilder::new();
 
         e.update("event: some:id:with:colons");
@@ -252,7 +326,10 @@ mod tests {
 
     #[test]
     fn should_ignore_messages_without_colon() {
-        let expected_event = Event::new("some_event", "test");
+        let expected_event = EventData::new()
+            .event("some_event")
+            .data("test")
+            .build();
         let mut e = EventBuilder::new();
 
         e.update("event: some_event");
